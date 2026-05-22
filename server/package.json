@@ -1,0 +1,40 @@
+{
+  "name": "yougrate-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "tsx dist/index.js",
+    "migrate": "tsx node_modules/.bin/knex migrate:latest --knexfile knexfile.ts",
+    "migrate:rollback": "tsx node_modules/.bin/knex migrate:rollback --knexfile knexfile.ts",
+    "migrate:make": "tsx node_modules/.bin/knex migrate:make --knexfile knexfile.ts -x ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.94.0",
+    "@aws-sdk/client-s3": "^3.1042.0",
+    "@aws-sdk/client-ses": "^3.1051.0",
+    "@aws-sdk/lib-storage": "^3.1042.0",
+    "@aws-sdk/s3-request-presigner": "^3.1051.0",
+    "@octokit/rest": "^22.0.1",
+    "@supabase/supabase-js": "^2.105.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
+    "knex": "^3.2.10",
+    "pg": "^8.20.0",
+    "simple-git": "^3.36.0",
+    "stripe": "^22.1.0",
+    "tsx": "^4.22.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.6.0",
+    "@types/pg": "^8.20.0",
+    "typescript": "^6.0.3"
+  }
+}
