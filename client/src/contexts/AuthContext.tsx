@@ -39,8 +39,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const p = await api.get<UserProfile>("/auth/me");
 
-      // If logged in via GitHub and we have a provider token, send it
-      if (currentSession?.provider_token && !p.github_connected) {
+      // If logged in via GitHub and we have a provider token, always send it
+      // (handles both first connect and reconnect with a fresh token)
+      if (currentSession?.provider_token) {
         const username = currentSession.user?.user_metadata?.user_name
           || currentSession.user?.user_metadata?.preferred_username;
         await api.post("/auth/github-token", {

@@ -6,6 +6,7 @@ import {
   fixBuildErrors,
   estimateTokens,
   calculateCost,
+  generateSupabaseSchema,
   MODEL,
   type AnalysisContext,
 } from "./ai";
@@ -54,7 +55,10 @@ async function updateMigration(
   migrationId: string,
   updates: Partial<Migration>,
 ) {
-  await db("migrations").where({ id: migrationId }).update(updates);
+  await db("migrations").where({ id: migrationId }).update({
+    ...updates,
+    updated_at: new Date().toISOString(),
+  });
 }
 
 const TOKEN_BUDGET_MULTIPLIER = 2;
@@ -532,22 +536,68 @@ export async function runMigration(migrationId: string): Promise<void> {
         "warn",
       );
     } else {
+      // Run data migration add-on if selected
+      if (migration.addon_data_migration) {
+        await log(migrationId, "Generating Supabase SQL schema from source code...");
+        try {
+          const dbFiles = await db("migration_files")
+            .where({ migration_id: migrationId, status: "completed" })
+            .select("file_path");
+          const s3Prefix = s3.getWorkspacePrefix(project.id, migrationId);
+          const sourceContents = new Map<string, string>();
+          for (const f of dbFiles.slice(0, 30)) {
+            try {
+              const content = await s3.downloadFile(`${s3Prefix}/${f.file_path}`);
+              sourceContents.set(f.file_path, content);
+            } catch {
+              // skip files that can't be read
+            }
+          }
+          if (sourceContents.size > 0) {
+            const schemaResult = await generateSupabaseSchema(
+              sourceContents,
+              migration.detected_platform || "unknown",
+            );
+            totalInput += schemaResult.inputTokens;
+            totalOutput += schemaResult.outputTokens;
+            await s3.uploadFile(
+              `${s3Prefix}/migrated/supabase/migrations/001_initial_schema.sql`,
+              schemaResult.content,
+            );
+            await log(migrationId, `SQL schema generated (${schemaResult.inputTokens + schemaResult.outputTokens} tokens)`);
+          } else {
+            await log(migrationId, "No source files available for schema generation", "warn");
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await log(migrationId, `Schema generation failed: ${msg}`, "warn");
+        }
+      }
+
+      const finalCost = calculateCost(totalInput, totalOutput);
+      const finalStatus = migration.addon_code_review ? "pending_review" : "completed";
+
       await updateMigration(migrationId, {
-        status: "completed",
+        status: finalStatus,
         files_migrated: filesMigrated,
         actual_input_tokens: totalInput,
         actual_output_tokens: totalOutput,
-        actual_cost_cents: actualCost.billedCostCents,
+        actual_cost_cents: finalCost.billedCostCents,
         current_file: null,
         completed_at: new Date().toISOString(),
       });
       await db("projects")
         .where({ id: project.id })
         .update({ status: "migrated" });
-      await log(
-        migrationId,
-        `Migration complete: ${filesMigrated}/${totalFilesToMigrate} files migrated`,
-      );
+
+      if (migration.addon_code_review) {
+        await log(migrationId, `Migration complete — awaiting senior engineer code review`);
+      } else {
+        await log(
+          migrationId,
+          `Migration complete: ${filesMigrated}/${totalFilesToMigrate} files migrated`,
+        );
+      }
     }
   } catch (err: unknown) {
     const message = friendlyError(err);

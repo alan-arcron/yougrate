@@ -50,8 +50,20 @@ router.get("/github/repos", requireAuth, async (req: AuthRequest, res: Response)
     return;
   }
 
-  const repos = await githubService.listRepos(user.github_access_token);
-  res.json(repos);
+  try {
+    const repos = await githubService.listRepos(user.github_access_token);
+    res.json(repos);
+  } catch (err: unknown) {
+    const status = (err as { status?: number }).status;
+    if (status === 401) {
+      res.status(401).json({
+        error: "github_token_expired",
+        message: "Your GitHub token has expired. Please reconnect GitHub in Settings.",
+      });
+      return;
+    }
+    throw err;
+  }
 });
 
 router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {

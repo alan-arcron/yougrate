@@ -14,7 +14,9 @@ import {
   createCheckoutForMigration,
   createCheckoutForOverage,
   verifyCheckoutPaid,
+  addonTotalCents,
 } from "../services/billing";
+import type { CheckoutAddons } from "../services/billing";
 import { calculateCost } from "../services/ai";
 import * as vercelService from "../services/vercel";
 
@@ -33,7 +35,6 @@ const retrySchema = z.object({
 
 const router = Router();
 
-const MAX_RETRIES_PER_MIGRATION = 2;
 
 async function checkAnalysisQuota(
   userId: string,
@@ -135,9 +136,15 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   res.json({ ...migration, is_deployed: project.status === "deployed", files });
 });
 
+const confirmSchema = z.object({
+  addon_data_migration: z.boolean().optional(),
+  addon_code_review: z.boolean().optional(),
+}).strip();
+
 router.post(
   "/:id/confirm",
   requireAuth,
+  validateBody(confirmSchema),
   async (req: AuthRequest, res: Response) => {
     const migration = await db("migrations")
       .where({ id: req.params.id })
@@ -161,6 +168,16 @@ router.post(
       return;
     }
 
+    const addons: CheckoutAddons = {
+      dataMigration: req.body.addon_data_migration ?? false,
+      codeReview: req.body.addon_code_review ?? false,
+    };
+
+    await db("migrations").where({ id: migration.id }).update({
+      addon_data_migration: addons.dataMigration,
+      addon_code_review: addons.codeReview,
+    });
+
     const totalTokens =
       migration.estimated_input_tokens + migration.estimated_output_tokens;
     const { checkoutUrl } = await createCheckoutForMigration(
@@ -169,6 +186,7 @@ router.post(
       migration.id,
       migration.estimated_cost_cents,
       totalTokens,
+      addons,
     );
 
     res.json({ checkout_url: checkoutUrl });
@@ -239,8 +257,8 @@ router.post(
     const migration = await db("migrations")
       .where({ id: req.params.id })
       .first();
-    if (!migration || migration.status !== "completed") {
-      res.status(400).json({ error: "Migration must be completed" });
+    if (!migration || !["completed", "reviewed"].includes(migration.status)) {
+      res.status(400).json({ error: "Migration must be completed or reviewed" });
       return;
     }
 
@@ -559,15 +577,7 @@ router.post(
       return;
     }
 
-    // Check retry cap
     const retryCount = migration.retry_count || 0;
-    if (retryCount >= MAX_RETRIES_PER_MIGRATION) {
-      res.status(429).json({
-        error: "retry_limit_reached",
-        message: `Maximum of ${MAX_RETRIES_PER_MIGRATION} retries per migration reached. Start a new migration to try again.`,
-      });
-      return;
-    }
 
     // Determine whether to retry analysis or migration execution
     const hasCompletedFiles = await db("migration_files")
@@ -607,7 +617,7 @@ router.post(
 
       res.json({
         status: "retrying_migration",
-        retries_remaining: MAX_RETRIES_PER_MIGRATION - retryCount - 1,
+        retry_count: retryCount + 1,
       });
     } else {
       // Failed during analysis — resume analysis from cache
@@ -630,7 +640,7 @@ router.post(
       res.json({
         status: "retrying_analysis",
         model: model || "default",
-        retries_remaining: MAX_RETRIES_PER_MIGRATION - retryCount - 1,
+        retry_count: retryCount + 1,
       });
     }
   },

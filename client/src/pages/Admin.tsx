@@ -27,12 +27,15 @@ import {
   ArrowLeft,
   Cpu,
   TrendingUp,
+  Eye,
+  ExternalLink,
 } from "lucide-react";
 
 interface Stats {
   total_users: number;
   total_migrations: number;
   open_tickets: number;
+  pending_reviews: number;
   total_revenue_cents: number;
   anthropic_cost_cents: number;
   anthropic_margin_cents: number;
@@ -44,8 +47,23 @@ interface Stats {
   };
 }
 
+interface PendingReview {
+  id: string;
+  project_id: string;
+  status: string;
+  detected_platform: string | null;
+  files_to_migrate: number;
+  files_migrated: number;
+  output_repo_url: string | null;
+  output_branch: string | null;
+  completed_at: string | null;
+  project_name: string;
+  user_email: string;
+}
+
 interface CostRow {
   id: string;
+  project_id: string;
   status: string;
   detected_platform: string | null;
   project_name: string;
@@ -56,8 +74,10 @@ interface CostRow {
   actual_output_tokens: number;
   actual_cost_cents: number;
   estimated_cost_cents: number;
+  raw_cost_cents: number;
   revenue_cents: number;
   margin_cents: number;
+  payment_status: string;
   created_at: string;
 }
 
@@ -129,6 +149,7 @@ interface MigrationDetail {
   actual_input_tokens: number;
   actual_output_tokens: number;
   actual_cost_cents: number;
+  raw_cost_cents: number;
   revenue_cents: number;
   margin_cents: number;
   retry_count: number;
@@ -150,7 +171,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function Admin() {
-  const { profile } = useAuth();
+  const { profile, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   const [stats, setStats] = useState<Stats | null>(null);
@@ -169,14 +190,19 @@ export default function Admin() {
   const [expandedMigration, setExpandedMigration] = useState<string | null>(null);
   const [migrationDetail, setMigrationDetail] = useState<MigrationDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [pendingReviews, setPendingReviews] = useState<PendingReview[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(false);
+  const [updatingReview, setUpdatingReview] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!profile?.is_admin) {
+    if (authLoading || !profile) return;
+    if (!profile.is_admin) {
       navigate("/dashboard");
       return;
     }
     api.get<Stats>("/admin/stats").then(setStats).catch(console.error);
-  }, [profile]);
+    loadUsers();
+  }, [profile, authLoading]);
 
   function loadUsers(search?: string) {
     setLoadingUsers(true);
@@ -212,6 +238,29 @@ export default function Admin() {
       setMigrationDetail(null);
     } finally {
       setLoadingDetail(false);
+    }
+  }
+
+  function loadReviews() {
+    setLoadingReviews(true);
+    api
+      .get<PendingReview[]>("/admin/pending-reviews")
+      .then(setPendingReviews)
+      .catch(console.error)
+      .finally(() => setLoadingReviews(false));
+  }
+
+  async function updateReviewStatus(migrationId: string, status: "reviewing" | "reviewed") {
+    setUpdatingReview(migrationId);
+    try {
+      await api.patch(`/admin/migrations/${migrationId}/review-status`, { status });
+      loadReviews();
+      api.get<Stats>("/admin/stats").then(setStats).catch(console.error);
+      toast.success(status === "reviewed" ? "Migration marked as reviewed" : "Review started");
+    } catch {
+      toast.error("Failed to update review status");
+    } finally {
+      setUpdatingReview(null);
     }
   }
 
@@ -258,7 +307,8 @@ export default function Admin() {
     }
   }
 
-  if (!profile?.is_admin) return null;
+  if (authLoading || !profile) return null;
+  if (!profile.is_admin) return null;
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
@@ -275,7 +325,7 @@ export default function Admin() {
       {/* Stats */}
       {stats && (
         <div className="space-y-4 mb-8">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <Card>
               <CardContent className="pt-6">
                 <div className="flex items-center gap-3">
@@ -314,6 +364,17 @@ export default function Admin() {
             <Card>
               <CardContent className="pt-6">
                 <div className="flex items-center gap-3">
+                  <Eye className="h-5 w-5 text-amber-500" />
+                  <div>
+                    <p className="text-2xl font-bold">{stats.pending_reviews}</p>
+                    <p className="text-xs text-muted-foreground">Pending Reviews</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-3">
                   <MessageSquare className="h-5 w-5 text-primary" />
                   <div>
                     <p className="text-2xl font-bold">{stats.open_tickets}</p>
@@ -333,7 +394,7 @@ export default function Admin() {
                     <p className="text-2xl font-bold">
                       ${(stats.anthropic_cost_cents / 100).toFixed(2)}
                     </p>
-                    <p className="text-xs text-muted-foreground">Anthropic Cost</p>
+                    <p className="text-xs text-muted-foreground">API Cost</p>
                   </div>
                 </div>
               </CardContent>
@@ -381,11 +442,20 @@ export default function Admin() {
           if (v === "users") loadUsers();
           if (v === "tickets") loadTickets(ticketFilter);
           if (v === "costs") loadCosts();
+          if (v === "reviews") loadReviews();
         }}
       >
         <TabsList className="mb-6">
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="costs">Anthropic Costs</TabsTrigger>
+          <TabsTrigger value="reviews" className="relative">
+            Reviews
+            {stats && stats.pending_reviews > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-amber-500 text-white">
+                {stats.pending_reviews}
+              </span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="tickets">Support Tickets</TabsTrigger>
         </TabsList>
 
@@ -530,7 +600,7 @@ export default function Admin() {
                                         {/* Cost comparison */}
                                         <div>
                                           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Cost Breakdown</p>
-                                          <div className="grid grid-cols-5 gap-3">
+                                          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
                                             <div className="bg-muted/50 rounded p-2">
                                               <p className="text-xs text-muted-foreground">Analysis</p>
                                               <p className="text-sm font-mono font-medium">
@@ -538,12 +608,12 @@ export default function Admin() {
                                               </p>
                                             </div>
                                             <div className="bg-muted/50 rounded p-2">
-                                              <p className="text-xs text-muted-foreground">Estimated</p>
-                                              <p className="text-sm font-mono font-medium">${(migrationDetail.estimated_cost_cents / 100).toFixed(2)}</p>
+                                              <p className="text-xs text-muted-foreground">API Cost</p>
+                                              <p className="text-sm font-mono font-medium text-orange-600">${(migrationDetail.raw_cost_cents / 100).toFixed(2)}</p>
                                             </div>
                                             <div className="bg-muted/50 rounded p-2">
-                                              <p className="text-xs text-muted-foreground">Actual Cost</p>
-                                              <p className="text-sm font-mono font-medium">${(migrationDetail.actual_cost_cents / 100).toFixed(2)}</p>
+                                              <p className="text-xs text-muted-foreground">Billed</p>
+                                              <p className="text-sm font-mono font-medium text-muted-foreground">${(migrationDetail.actual_cost_cents / 100).toFixed(2)}</p>
                                             </div>
                                             <div className="bg-muted/50 rounded p-2">
                                               <p className="text-xs text-muted-foreground">Revenue</p>
@@ -553,6 +623,14 @@ export default function Admin() {
                                               <p className="text-xs text-muted-foreground">Margin</p>
                                               <p className={`text-sm font-mono font-medium ${migrationDetail.margin_cents >= 0 ? "text-green-600" : "text-red-600"}`}>
                                                 ${(migrationDetail.margin_cents / 100).toFixed(2)}
+                                              </p>
+                                            </div>
+                                            <div className="bg-muted/50 rounded p-2">
+                                              <p className="text-xs text-muted-foreground">Markup</p>
+                                              <p className="text-sm font-mono font-medium">
+                                                {migrationDetail.raw_cost_cents > 0
+                                                  ? `${(migrationDetail.revenue_cents / migrationDetail.raw_cost_cents).toFixed(1)}x`
+                                                  : "—"}
                                               </p>
                                             </div>
                                           </div>
@@ -713,7 +791,7 @@ export default function Admin() {
               ))}
               {users.length === 0 && !loadingUsers && (
                 <p className="text-center text-sm text-muted-foreground py-8">
-                  Click Search to load users
+                  No users found
                 </p>
               )}
             </div>
@@ -740,8 +818,10 @@ export default function Admin() {
                       <th className="px-3 py-2 text-left font-medium">Project</th>
                       <th className="px-3 py-2 text-left font-medium">User</th>
                       <th className="px-3 py-2 text-left font-medium">Status</th>
+                      <th className="px-3 py-2 text-left font-medium">Payment</th>
                       <th className="px-3 py-2 text-right font-medium">Tokens</th>
-                      <th className="px-3 py-2 text-right font-medium">Our Cost</th>
+                      <th className="px-3 py-2 text-right font-medium">API Cost</th>
+                      <th className="px-3 py-2 text-right font-medium">Billed</th>
                       <th className="px-3 py-2 text-right font-medium">Revenue</th>
                       <th className="px-3 py-2 text-right font-medium">Margin</th>
                       <th className="px-3 py-2 text-right font-medium">Date</th>
@@ -749,7 +829,11 @@ export default function Admin() {
                   </thead>
                   <tbody>
                     {costBreakdown.map((row) => (
-                      <tr key={row.id} className="border-b last:border-0">
+                      <tr
+                        key={row.id}
+                        onClick={() => navigate(`/project/${row.project_id}/migration/${row.id}`)}
+                        className="border-b last:border-0 hover:bg-muted/40 transition-colors"
+                      >
                         <td className="px-3 py-2">
                           <div className="font-medium truncate max-w-[160px]">{row.project_name}</div>
                           {row.detected_platform && (
@@ -762,10 +846,21 @@ export default function Admin() {
                             {row.status}
                           </Badge>
                         </td>
+                        <td className="px-3 py-2">
+                          <Badge
+                            variant={row.payment_status === "paid" ? "default" : row.payment_status === "refunded" ? "destructive" : "outline"}
+                            className={`text-xs capitalize ${row.payment_status === "paid" ? "bg-green-600" : ""}`}
+                          >
+                            {row.payment_status}
+                          </Badge>
+                        </td>
                         <td className="px-3 py-2 text-right font-mono text-xs">
                           {((row.actual_input_tokens + row.actual_output_tokens) / 1000).toFixed(0)}k
                         </td>
-                        <td className="px-3 py-2 text-right font-mono text-xs">
+                        <td className="px-3 py-2 text-right font-mono text-xs text-orange-600">
+                          ${(row.raw_cost_cents / 100).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
                           ${(row.actual_cost_cents / 100).toFixed(2)}
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-xs">
@@ -782,6 +877,85 @@ export default function Admin() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Reviews tab */}
+        <TabsContent value="reviews">
+          {loadingReviews ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : pendingReviews.length === 0 ? (
+            <p className="text-center text-sm text-muted-foreground py-8">
+              No migrations awaiting review
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {pendingReviews.map((r) => (
+                <Card key={r.id}>
+                  <CardContent className="py-4">
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium">{r.project_name}</p>
+                          <Badge
+                            variant={r.status === "reviewing" ? "default" : "secondary"}
+                            className="text-xs capitalize"
+                          >
+                            {r.status === "pending_review" ? "awaiting review" : r.status}
+                          </Badge>
+                          {r.detected_platform && (
+                            <Badge variant="outline" className="text-xs capitalize">
+                              {r.detected_platform}
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {r.user_email} &middot; {r.files_migrated}/{r.files_to_migrate} files
+                          {r.completed_at && ` · completed ${new Date(r.completed_at).toLocaleString()}`}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {r.output_repo_url && (
+                          <a
+                            href={r.output_repo_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Button variant="outline" size="sm">
+                              <ExternalLink className="mr-1.5 h-3 w-3" />
+                              View Code
+                            </Button>
+                          </a>
+                        )}
+                        {r.status === "pending_review" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={updatingReview === r.id}
+                            onClick={() => updateReviewStatus(r.id, "reviewing")}
+                          >
+                            <Eye className="mr-1.5 h-3 w-3" />
+                            {updatingReview === r.id ? "Updating..." : "Start Review"}
+                          </Button>
+                        )}
+                        {r.status === "reviewing" && (
+                          <Button
+                            size="sm"
+                            disabled={updatingReview === r.id}
+                            onClick={() => updateReviewStatus(r.id, "reviewed")}
+                          >
+                            {updatingReview === r.id ? "Updating..." : "Mark Reviewed"}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           )}
         </TabsContent>

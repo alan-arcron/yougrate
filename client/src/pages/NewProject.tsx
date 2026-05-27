@@ -12,8 +12,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ArrowLeft, Search, Lock, Globe } from "lucide-react";
+import { ArrowLeft, Search, Lock, Globe, Info, AlertCircle } from "lucide-react";
 import { GithubIcon } from "@/components/icons";
+import { toast } from "sonner";
 
 interface GithubRepo {
   id: number;
@@ -30,22 +31,32 @@ export default function NewProject() {
   const { profile } = useAuth();
   const navigate = useNavigate();
   const [repos, setRepos] = useState<GithubRepo[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(!!profile?.github_connected);
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
 
   const [supabaseUrl, setSupabaseUrl] = useState("");
   const [supabaseKey, setSupabaseKey] = useState("");
   const [selectedRepo, setSelectedRepo] = useState<GithubRepo | null>(null);
+  const [tokenExpired, setTokenExpired] = useState(false);
 
   useEffect(() => {
     if (!profile?.github_connected) return;
-    setLoading(true);
+    let cancelled = false;
     api
       .get<GithubRepo[]>("/projects/github/repos")
-      .then(setRepos)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+      .then((data) => { if (!cancelled) setRepos(data); })
+      .catch((err) => {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("expired") || msg.includes("token") || msg.includes("401")) {
+          setTokenExpired(true);
+        } else {
+          toast.error("Failed to load repositories");
+        }
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [profile]);
 
   const filtered = repos.filter((r) =>
@@ -156,6 +167,29 @@ export default function NewProject() {
                 Change
               </Button>
             </div>
+          ) : tokenExpired ? (
+            <div className="space-y-3">
+              <div className="flex items-start gap-3 p-4 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800">
+                <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                    GitHub token expired
+                  </p>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                    Your GitHub access token has expired. Reconnect your account to load repositories.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => navigate("/settings")}
+                  >
+                    <GithubIcon className="mr-2 h-3.5 w-3.5" />
+                    Reconnect GitHub
+                  </Button>
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="space-y-3">
               <div className="relative">
@@ -215,14 +249,32 @@ export default function NewProject() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50 border border-border text-xs text-muted-foreground">
+            <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>
+              Find both values in your{" "}
+              <a
+                href="https://supabase.com/dashboard/project/_/settings/api"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Supabase dashboard
+              </a>
+              {" "}under <strong>Project Settings &rarr; API</strong>. The URL is listed as "Project URL" and the anon key is under "Project API keys" (the one labeled <code className="bg-muted px-1 rounded">anon</code> / <code className="bg-muted px-1 rounded">public</code>).
+            </span>
+          </div>
           <div className="space-y-2">
             <Label htmlFor="supabase-url">Supabase URL</Label>
             <Input
               id="supabase-url"
-              placeholder="https://your-project.supabase.co"
+              placeholder="https://abcdefghijkl.supabase.co"
               value={supabaseUrl}
               onChange={(e) => setSupabaseUrl(e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">
+              Looks like <code className="bg-muted px-1 rounded">https://&lt;project-id&gt;.supabase.co</code>
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="supabase-key">Anon Key</Label>
@@ -232,6 +284,9 @@ export default function NewProject() {
               value={supabaseKey}
               onChange={(e) => setSupabaseKey(e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">
+              The public <code className="bg-muted px-1 rounded">anon</code> key — safe to embed in client-side code
+            </p>
           </div>
         </CardContent>
       </Card>

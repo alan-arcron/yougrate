@@ -30,6 +30,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   try {
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data.user) {
+      console.warn(`[auth] Invalid token: ${error?.message || "no user"}`);
       res.status(401).json({ error: "Invalid token" });
       return;
     }
@@ -37,7 +38,8 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     req.userId = data.user.id;
     req.userEmail = data.user.email;
     next();
-  } catch {
+  } catch (err) {
+    console.warn(`[auth] Auth failed: ${err instanceof Error ? err.message : String(err)}`);
     res.status(401).json({ error: "Auth failed" });
   }
 }

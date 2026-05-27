@@ -32,7 +32,7 @@ export function validateQuery(schema: ZodSchema) {
       });
       return;
     }
-    req.query = result.data as typeof req.query;
+    Object.assign(req.query, result.data);
     next();
   };
 }

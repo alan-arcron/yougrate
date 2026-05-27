@@ -14,6 +14,8 @@ import supportRouter from "./routes/support";
 import adminRouter from "./routes/admin";
 import { getRawStripe, handleCheckoutCompleted } from "./services/billing";
 import { runMigration } from "./services/migrator";
+import { startStallDetector } from "./services/stall-detector";
+import { requestLogger } from "./middleware/logger";
 
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
@@ -156,10 +158,11 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), asyn
 });
 
 app.use(express.json({ limit: "5mb" }));
+app.use(requestLogger);
 
 app.use("/api/auth", authLimiter, authRouter);
 app.use("/api/projects", globalLimiter, projectsRouter);
-app.use("/api/migrations", strictLimiter, migrationsRouter);
+app.use("/api/migrations", migrationsRouter);
 app.use("/api/billing", strictLimiter, billingRouter);
 app.use("/api/support", strictLimiter, supportRouter);
 app.use("/api/admin", globalLimiter, adminRouter);
@@ -176,6 +179,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 async function boot() {
   await initDb();
+  startStallDetector();
   console.log(`[yougrate] Server listening on :${PORT}`);
 }
 

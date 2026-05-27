@@ -1,9 +1,20 @@
 import { Router, Response } from "express";
 import { z } from "zod";
 import { db } from "../db";
+import { ANTHROPIC_PRICING } from "../types";
 import type { AuthRequest } from "../middleware/auth";
 import { requireAuth, requireAdmin } from "../middleware/auth";
 import { validateBody, validateQuery } from "../middleware/validate";
+
+const AI_MODEL = (process.env.AI_MODEL || "claude-opus-4-7") as keyof typeof ANTHROPIC_PRICING;
+
+function rawAnthropicCostCents(inputTokens: number, outputTokens: number): number {
+  const pricing = ANTHROPIC_PRICING[AI_MODEL] || ANTHROPIC_PRICING["claude-opus-4-7"];
+  return Math.ceil(
+    (inputTokens / 1_000_000) * pricing.input +
+    (outputTokens / 1_000_000) * pricing.output,
+  );
+}
 
 const usersQuerySchema = z.object({
   search: z.string().max(200).optional(),
@@ -32,11 +43,9 @@ router.get("/stats", async (_req: AuthRequest, res: Response) => {
   const [migrationCount] = await db("migrations").count("id as count");
   const [ticketCount] = await db("support_tickets").where({ status: "open" }).count("id as count");
   const [revenue] = await db("billing_events").where({ status: "paid" }).sum("billed_cost_cents as total");
+  const [pendingReviews] = await db("migrations").whereIn("status", ["pending_review", "reviewing"]).count("id as count");
 
-  const [anthropicCost] = await db("migrations")
-    .whereNotNull("actual_cost_cents")
-    .sum("actual_cost_cents as total");
-  const [anthropicTokens] = await db("migrations")
+  const anthropicTokens = await db("migrations")
     .select(
       db.raw("COALESCE(SUM(actual_input_tokens), 0) as total_input"),
       db.raw("COALESCE(SUM(actual_output_tokens), 0) as total_output"),
@@ -46,12 +55,16 @@ router.get("/stats", async (_req: AuthRequest, res: Response) => {
     .first();
 
   const totalRevenueCents = Number(revenue.total) || 0;
-  const totalAnthropicCostCents = Number(anthropicCost.total) || 0;
+  const totalAnthropicCostCents = rawAnthropicCostCents(
+    Number(anthropicTokens?.total_input) || 0,
+    Number(anthropicTokens?.total_output) || 0,
+  );
 
   res.json({
     total_users: Number(userCount.count),
     total_migrations: Number(migrationCount.count),
     open_tickets: Number(ticketCount.count),
+    pending_reviews: Number(pendingReviews.count),
     total_revenue_cents: totalRevenueCents,
     anthropic_cost_cents: totalAnthropicCostCents,
     anthropic_margin_cents: totalRevenueCents - totalAnthropicCostCents,
@@ -70,6 +83,7 @@ router.get("/cost-breakdown", async (_req: AuthRequest, res: Response) => {
     .join("users", "projects.user_id", "users.id")
     .select(
       "migrations.id",
+      "migrations.project_id",
       "migrations.status",
       "migrations.detected_platform",
       "migrations.files_to_migrate",
@@ -88,20 +102,42 @@ router.get("/cost-breakdown", async (_req: AuthRequest, res: Response) => {
 
   const billingByMigration = await db("billing_events")
     .whereNotNull("migration_id")
-    .where({ status: "paid" })
-    .select("migration_id")
+    .select("migration_id", "status")
     .sum("billed_cost_cents as revenue_cents")
-    .groupBy("migration_id");
+    .groupBy("migration_id", "status");
 
-  const revenueMap = new Map(
-    billingByMigration.map((b: Record<string, unknown>) => [String(b.migration_id), Number(b.revenue_cents)]),
-  );
+  const revenueMap = new Map<string, number>();
+  const paymentStatusMap = new Map<string, string>();
 
-  const rows = migrations.map((m: Record<string, unknown>) => ({
-    ...m,
-    revenue_cents: revenueMap.get(m.id as string) || 0,
-    margin_cents: (revenueMap.get(m.id as string) || 0) - (Number(m.actual_cost_cents) || 0),
-  }));
+  for (const b of billingByMigration as Array<Record<string, unknown>>) {
+    const mid = String(b.migration_id);
+    const status = String(b.status);
+    const amount = Number(b.revenue_cents) || 0;
+
+    if (status === "paid") {
+      revenueMap.set(mid, (revenueMap.get(mid) || 0) + amount);
+    }
+
+    const current = paymentStatusMap.get(mid);
+    if (status === "paid") paymentStatusMap.set(mid, "paid");
+    else if (status === "refunded") paymentStatusMap.set(mid, "refunded");
+    else if (!current) paymentStatusMap.set(mid, status);
+  }
+
+  const rows = migrations.map((m: Record<string, unknown>) => {
+    const rev = revenueMap.get(m.id as string) || 0;
+    const apiCost = rawAnthropicCostCents(
+      Number(m.actual_input_tokens) || 0,
+      Number(m.actual_output_tokens) || 0,
+    );
+    return {
+      ...m,
+      raw_cost_cents: apiCost,
+      revenue_cents: rev,
+      margin_cents: rev - apiCost,
+      payment_status: paymentStatusMap.get(m.id as string) || "unpaid",
+    };
+  });
 
   res.json(rows);
 });
@@ -198,16 +234,75 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
     .filter((b: Record<string, unknown>) => b.status === "paid")
     .reduce((sum: number, b: Record<string, unknown>) => sum + (Number(b.billed_cost_cents) || 0), 0);
 
+  const apiCost = rawAnthropicCostCents(
+    migration.actual_input_tokens || 0,
+    migration.actual_output_tokens || 0,
+  );
+
   res.json({
     ...migration,
     project_name: project?.name || null,
     github_repo_full_name: project?.github_repo_full_name || null,
+    raw_cost_cents: apiCost,
     revenue_cents: revenueCents,
-    margin_cents: revenueCents - (migration.actual_cost_cents || 0),
+    margin_cents: revenueCents - apiCost,
     billing_events: billingEvents,
     files,
   });
 });
+
+const reviewStatusSchema = z.object({
+  status: z.enum(["reviewing", "reviewed"]),
+}).strip();
+
+router.get("/pending-reviews", async (_req: AuthRequest, res: Response) => {
+  const reviews = await db("migrations")
+    .join("projects", "migrations.project_id", "projects.id")
+    .join("users", "projects.user_id", "users.id")
+    .whereIn("migrations.status", ["pending_review", "reviewing"])
+    .select(
+      "migrations.id",
+      "migrations.project_id",
+      "migrations.status",
+      "migrations.detected_platform",
+      "migrations.files_to_migrate",
+      "migrations.files_migrated",
+      "migrations.output_repo_url",
+      "migrations.output_branch",
+      "migrations.completed_at",
+      "projects.name as project_name",
+      "users.email as user_email",
+    )
+    .orderBy("migrations.completed_at", "asc");
+
+  res.json(reviews);
+});
+
+router.patch(
+  "/migrations/:id/review-status",
+  validateBody(reviewStatusSchema),
+  async (req: AuthRequest, res: Response) => {
+    const { status } = req.body;
+    const migration = await db("migrations").where({ id: req.params.id }).first();
+
+    if (!migration) {
+      res.status(404).json({ error: "Migration not found" });
+      return;
+    }
+
+    if (!["pending_review", "reviewing"].includes(migration.status)) {
+      res.status(400).json({ error: `Cannot transition from ${migration.status} to ${status}` });
+      return;
+    }
+
+    await db("migrations").where({ id: migration.id }).update({
+      status,
+      updated_at: new Date().toISOString(),
+    });
+
+    res.json({ id: migration.id, status });
+  },
+);
 
 router.get("/tickets", validateQuery(ticketsQuerySchema), async (req: AuthRequest, res: Response) => {
   const { status, type, page = "1", limit = "50" } = req.query;

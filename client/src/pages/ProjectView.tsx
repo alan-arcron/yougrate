@@ -5,7 +5,9 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Plus, ExternalLink, Loader2, Lock, CreditCard } from "lucide-react";
+import { ArrowLeft, Plus, ExternalLink, Loader2, Lock, CreditCard, Pencil, Check, X, Info } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface ProjectDetail {
   id: string;
@@ -14,6 +16,7 @@ interface ProjectDetail {
   github_repo_url: string;
   detected_platform: string | null;
   supabase_url: string | null;
+  supabase_anon_key: string | null;
   status: string;
   created_at: string;
   migrations: {
@@ -33,6 +36,10 @@ export default function ProjectView() {
   const [loading, setLoading] = useState(true);
   const [quotaBlocked, setQuotaBlocked] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  const [editingSupabase, setEditingSupabase] = useState(false);
+  const [supabaseUrl, setSupabaseUrl] = useState("");
+  const [supabaseKey, setSupabaseKey] = useState("");
+  const [savingSupabase, setSavingSupabase] = useState(false);
 
   useEffect(() => {
     api.get<ProjectDetail>(`/projects/${projectId}`)
@@ -125,13 +132,116 @@ export default function ProjectView() {
           </Card>
           <Card>
             <CardContent className="py-4">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Supabase</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">Supabase</p>
+                <button
+                  onClick={() => {
+                    setEditingSupabase(!editingSupabase);
+                    setSupabaseUrl(project.supabase_url || "");
+                    setSupabaseKey(project.supabase_anon_key || "");
+                  }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <p className="text-lg font-semibold mt-1">
                 {project.supabase_url ? "Connected" : "Not connected"}
               </p>
+              {project.supabase_url && !editingSupabase && (
+                <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate">
+                  {project.supabase_url}
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>
+
+        {editingSupabase && (
+          <Card className="mb-8">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Supabase Settings</CardTitle>
+              <CardDescription>
+                Update the Supabase project this migration targets
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50 border border-border text-xs text-muted-foreground">
+                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>
+                  Find both values in your{" "}
+                  <a
+                    href="https://supabase.com/dashboard/project/_/settings/api"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Supabase dashboard
+                  </a>
+                  {" "}under <strong>Project Settings &rarr; API</strong>. The URL is listed as "Project URL" and the anon key is under "Project API keys" (the one labeled <code className="bg-muted px-1 rounded">anon</code> / <code className="bg-muted px-1 rounded">public</code>).
+                </span>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="sb-url">Supabase URL</Label>
+                <Input
+                  id="sb-url"
+                  placeholder="https://abcdefghijkl.supabase.co"
+                  value={supabaseUrl}
+                  onChange={(e) => setSupabaseUrl(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Looks like <code className="bg-muted px-1 rounded">https://&lt;project-id&gt;.supabase.co</code>
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="sb-key">Anon Key</Label>
+                <Input
+                  id="sb-key"
+                  placeholder="eyJhbGciOiJIUzI1NiIs..."
+                  value={supabaseKey}
+                  onChange={(e) => setSupabaseKey(e.target.value)}
+                  type="password"
+                />
+                <p className="text-xs text-muted-foreground">
+                  The public <code className="bg-muted px-1 rounded">anon</code> key — safe to embed in client-side code
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  disabled={savingSupabase}
+                  onClick={async () => {
+                    setSavingSupabase(true);
+                    try {
+                      const updated = await api.patch<ProjectDetail>(
+                        `/projects/${projectId}/supabase`,
+                        { supabase_url: supabaseUrl || null, supabase_anon_key: supabaseKey || null },
+                      );
+                      setProject((prev) => prev ? { ...prev, supabase_url: updated.supabase_url, supabase_anon_key: updated.supabase_anon_key } : prev);
+                      setEditingSupabase(false);
+                      toast.success("Supabase settings updated");
+                    } catch {
+                      toast.error("Failed to update Supabase settings");
+                    } finally {
+                      setSavingSupabase(false);
+                    }
+                  }}
+                >
+                  <Check className="mr-1.5 h-3 w-3" />
+                  {savingSupabase ? "Saving..." : "Save"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditingSupabase(false)}
+                >
+                  <X className="mr-1.5 h-3 w-3" />
+                  Cancel
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {quotaBlocked && (
           <Card className="mb-6 border-amber-500/50">

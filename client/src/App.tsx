@@ -1,4 +1,11 @@
-import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate } from "react-router-dom";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  Link,
+  useNavigate,
+} from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Landing from "@/pages/Landing";
@@ -15,6 +22,7 @@ import Privacy from "@/pages/Privacy";
 import AppShell from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Component, type ReactNode, type ErrorInfo } from "react";
+import { Analytics } from "@vercel/analytics/react";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -105,12 +113,19 @@ function PublicShell({ children }: { children: ReactNode }) {
             className="flex items-center gap-2 hover:opacity-80 transition-opacity"
           >
             <img src="/yougrate.png" alt="Yougrate" className="h-7 w-7" />
-            <span className="text-xl tracking-tight" style={{ fontFamily: "'Righteous', cursive" }}>
+            <span
+              className="text-xl tracking-tight"
+              style={{ fontFamily: "'Righteous', cursive" }}
+            >
               Yougrate
             </span>
           </button>
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={() => navigate("/login")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/login")}
+            >
               Log in
             </Button>
             <Button size="sm" onClick={() => navigate("/login")}>
@@ -136,17 +151,74 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route path="/" element={!loading && session ? <Navigate to="/dashboard" /> : <Landing />} />
-      <Route path="/login" element={!loading && session ? <Navigate to="/dashboard" /> : <Login />} />
-      <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-      <Route path="/new" element={<ProtectedRoute><NewProject /></ProtectedRoute>} />
-      <Route path="/project/:projectId" element={<ProtectedRoute><ProjectView /></ProtectedRoute>} />
-      <Route path="/project/:projectId/migration/:migrationId" element={<ProtectedRoute><MigrationView /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-      <Route path="/support" element={<AuthAwareRoute><Support /></AuthAwareRoute>} />
+      <Route
+        path="/"
+        element={
+          !loading && session ? <Navigate to="/dashboard" /> : <Landing />
+        }
+      />
+      <Route
+        path="/login"
+        element={!loading && session ? <Navigate to="/dashboard" /> : <Login />}
+      />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/new"
+        element={
+          <ProtectedRoute>
+            <NewProject />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/project/:projectId"
+        element={
+          <ProtectedRoute>
+            <ProjectView />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/project/:projectId/migration/:migrationId"
+        element={
+          <ProtectedRoute>
+            <MigrationView />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <Settings />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/support"
+        element={
+          <AuthAwareRoute>
+            <Support />
+          </AuthAwareRoute>
+        }
+      />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
-      <Route path="/admin" element={<ProtectedRoute><Admin /></ProtectedRoute>} />
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <Admin />
+          </ProtectedRoute>
+        }
+      />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
@@ -157,6 +229,7 @@ export default function App() {
     <BrowserRouter>
       <ErrorBoundary>
         <AuthProvider>
+          <Analytics />
           <AppRoutes />
           <Toaster richColors position="bottom-right" />
         </AuthProvider>

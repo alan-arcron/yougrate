@@ -27,6 +27,9 @@ import {
   GitBranch,
   GitFork,
   Loader2,
+  Database,
+  UserCheck,
+  Info,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -87,6 +90,8 @@ export default function MigrationView() {
   const [pollKey, setPollKey] = useState(0);
   const [repoName, setRepoName] = useState("");
   const [pushType, setPushType] = useState<"new_repo" | "branch">("new_repo");
+  const [addonDataMigration, setAddonDataMigration] = useState(false);
+  const [addonCodeReview, setAddonCodeReview] = useState(false);
 
   async function fetchMigration() {
     try {
@@ -106,7 +111,7 @@ export default function MigrationView() {
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | null = null;
 
-    const TERMINAL_STATUSES = new Set(["estimated", "completed", "failed", "budget_exceeded"]);
+    const TERMINAL_STATUSES = new Set(["estimated", "completed", "failed", "budget_exceeded", "pending_review", "reviewed"]);
 
     const load = async () => {
       try {
@@ -202,6 +207,10 @@ export default function MigrationView() {
     try {
       const { checkout_url } = await api.post<{ checkout_url: string }>(
         `/migrations/${migrationId}/confirm`,
+        {
+          addon_data_migration: addonDataMigration,
+          addon_code_review: addonCodeReview,
+        },
       );
       window.location.href = checkout_url;
     } catch {
@@ -265,6 +274,8 @@ export default function MigrationView() {
   const isBudgetExceeded = migration.status === "budget_exceeded";
   const deployed = migration.is_deployed === true;
   const isCompleted = migration.status === "completed";
+  const isReviewed = migration.status === "reviewed";
+  const isPendingReview = migration.status === "pending_review" || migration.status === "reviewing";
   const isFailed = migration.status === "failed";
 
   return (
@@ -372,35 +383,85 @@ export default function MigrationView() {
                 </div>
               )}
 
-            {isEstimated && (
+            {isEstimated && (() => {
+              const addonCents = (addonDataMigration ? 2500 : 0) + (addonCodeReview ? 7500 : 0);
+              const totalCents = migration.estimated_cost_cents + addonCents;
+              return (
               <>
                 <Separator className="my-4" />
-                <div className="flex items-start justify-between gap-6">
-                  <div className="flex items-center gap-2">
-                    <DollarSign className="h-5 w-5 text-green-600" />
-                    <div>
-                      <p className="text-sm font-medium">Estimated Cost</p>
-                      <p className="text-2xl font-bold">
-                        ${(migration.estimated_cost_cents / 100).toFixed(2)}
+                <div className="flex items-center gap-2 mb-3">
+                  <DollarSign className="h-5 w-5 text-green-600" />
+                  <div>
+                    <p className="text-sm font-medium">Estimated Cost</p>
+                    <p className="text-2xl font-bold">
+                      ${(totalCents / 100).toFixed(2)}
+                    </p>
+                    <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
+                      <p>$20.00 base fee</p>
+                      <p>
+                        $
+                        {(
+                          (migration.estimated_cost_cents - 2000) /
+                          100
+                        ).toFixed(2)}{" "}
+                        token usage (~
+                        {(
+                          migration.estimated_input_tokens +
+                          migration.estimated_output_tokens
+                        ).toLocaleString()}{" "}
+                        tokens)
                       </p>
-                      <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
-                        <p>$20.00 base fee</p>
-                        <p>
-                          $
-                          {(
-                            (migration.estimated_cost_cents - 2000) /
-                            100
-                          ).toFixed(2)}{" "}
-                          token usage (~
-                          {(
-                            migration.estimated_input_tokens +
-                            migration.estimated_output_tokens
-                          ).toLocaleString()}{" "}
-                          tokens)
-                        </p>
-                      </div>
+                      {addonDataMigration && <p>$25.00 data migration</p>}
+                      {addonCodeReview && <p>$75.00 code review</p>}
                     </div>
                   </div>
+                </div>
+
+                <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Optional Add-ons</p>
+                  <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={addonDataMigration}
+                      onChange={(e) => setAddonDataMigration(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-border"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium flex items-center gap-1.5">
+                          <Database className="h-3.5 w-3.5" />
+                          Data Migration
+                        </span>
+                        <span className="text-sm font-semibold">+$25</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        AI analyzes your source database schema and generates Supabase SQL migration files (CREATE TABLE, RLS policies, indexes)
+                      </p>
+                    </div>
+                  </label>
+                  <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={addonCodeReview}
+                      onChange={(e) => setAddonCodeReview(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-border"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium flex items-center gap-1.5">
+                          <UserCheck className="h-3.5 w-3.5" />
+                          Senior Engineer Code Review
+                        </span>
+                        <span className="text-sm font-semibold">+$75</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        A human senior engineer reviews your migrated code before delivery
+                      </p>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="flex justify-end">
                   <Button
                     size="lg"
                     onClick={handlePayAndStart}
@@ -411,9 +472,10 @@ export default function MigrationView() {
                     ) : (
                       <CreditCard className="mr-2 h-4 w-4" />
                     )}
-                    {paying ? "Redirecting..." : "Pay & Start Migration"}
+                    {paying ? "Redirecting..." : `Pay $${(totalCents / 100).toFixed(2)} & Start`}
                   </Button>
                 </div>
+
                 <div className="mt-4 p-3 rounded-lg bg-muted/50 border border-border">
                   <p className="text-xs text-muted-foreground leading-relaxed">
                     <strong className="text-foreground">
@@ -450,7 +512,8 @@ export default function MigrationView() {
                   </p>
                 </div>
               </>
-            )}
+              );
+            })()}
           </CardContent>
         </Card>
       )}
@@ -470,6 +533,10 @@ export default function MigrationView() {
                   below for details.
                 </p>
               </div>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Info className="h-3 w-3 shrink-0" />
+              You can safely close this tab or refresh the page — your analysis will continue running on our servers.
             </div>
             <div className="pt-2 border-t">
               <p className="text-xs text-muted-foreground mb-2">
@@ -518,8 +585,12 @@ export default function MigrationView() {
               <span>{progress}%</span>
             </div>
             {isRunning && (
-              <div className="mt-4 pt-4 border-t">
-                <p className="text-xs text-muted-foreground mb-2">
+              <div className="mt-4 pt-4 border-t space-y-3">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Info className="h-3 w-3 shrink-0" />
+                  You can safely close this tab or refresh the page — your migration will continue running on our servers.
+                </div>
+                <p className="text-xs text-muted-foreground">
                   Migration stalled or disconnected? Resume from where it left
                   off.
                 </p>
@@ -591,8 +662,43 @@ export default function MigrationView() {
         </Card>
       )}
 
+      {/* Pending review */}
+      {isPendingReview && (
+        <Card className="mb-6 border-amber-500">
+          <CardContent className="py-6">
+            <div className="flex items-center gap-3">
+              <UserCheck className="h-5 w-5 text-amber-500" />
+              <div>
+                <p className="text-sm font-medium">Awaiting Senior Engineer Code Review</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Your migration is complete and has been queued for review by a senior engineer.
+                  {migration.status === "reviewing" ? " Review is in progress." : " We'll notify you when it's done."}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Reviewed */}
+      {isReviewed && (
+        <Card className="mb-6 border-green-500">
+          <CardContent className="py-6">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="h-5 w-5 text-green-600" />
+              <div>
+                <p className="text-sm font-medium">Code Review Complete</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Your migrated code has been reviewed by a senior engineer and is ready for use.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Push migrated code */}
-      {isCompleted && !migration.output_repo_url && (
+      {(isCompleted || isReviewed) && !migration.output_repo_url && (
         <Card className="mb-6">
           <CardHeader>
             <CardTitle className="text-lg">Push Migrated Code</CardTitle>
@@ -730,6 +836,10 @@ export default function MigrationView() {
                     : "Waiting for Vercel to build and deploy. If errors occur, they'll be fixed automatically."}
                 </p>
               </div>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Info className="h-3 w-3 shrink-0" />
+              You can safely close this tab or refresh the page — your build will continue running on our servers.
             </div>
           </CardContent>
         </Card>

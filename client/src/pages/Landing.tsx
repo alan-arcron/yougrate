@@ -102,6 +102,13 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {/* Promo banner */}
+      <div className="bg-primary text-primary-foreground text-center py-2 px-4 text-sm">
+        Use code <strong className="font-bold tracking-wide">ARCRON</strong> at
+        checkout for a <strong>free senior engineer code review</strong> — just
+        select the code review add-on. First 10 customers only.
+      </div>
+
       {/* Nav */}
       <header className="border-b border-border/40">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">

@@ -33,12 +33,32 @@ export async function getOrCreateCustomer(
   return customer.id;
 }
 
+export interface CheckoutAddons {
+  dataMigration?: boolean;
+  codeReview?: boolean;
+}
+
+const ADDON_DATA_MIGRATION_CENTS = parseInt(
+  process.env.ADDON_DATA_MIGRATION_CENTS || "2500",
+); // $25
+const ADDON_CODE_REVIEW_CENTS = parseInt(
+  process.env.ADDON_CODE_REVIEW_CENTS || "7500",
+); // $75
+
+export function addonTotalCents(addons?: CheckoutAddons): number {
+  let total = 0;
+  if (addons?.dataMigration) total += ADDON_DATA_MIGRATION_CENTS;
+  if (addons?.codeReview) total += ADDON_CODE_REVIEW_CENTS;
+  return total;
+}
+
 export async function createCheckoutForMigration(
   userId: string,
   email: string,
   migrationId: string,
   estimatedCostCents: number,
   estimatedTokens: number,
+  addons?: CheckoutAddons,
 ): Promise<{ checkoutUrl: string; sessionId: string }> {
   const s = getStripe();
   const customerId = await getOrCreateCustomer(userId, email);
@@ -71,6 +91,38 @@ export async function createCheckoutForMigration(
     });
   }
 
+  if (addons?.dataMigration) {
+    lineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: {
+          name: "Data migration (SQL schema generation)",
+          description:
+            "AI-generated Supabase SQL migrations, RLS policies & indexes from your source schema",
+        },
+        unit_amount: ADDON_DATA_MIGRATION_CENTS,
+      },
+      quantity: 1,
+    });
+  }
+
+  if (addons?.codeReview) {
+    lineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: {
+          name: "Senior engineer code review",
+          description:
+            "A human senior engineer reviews your migrated code before delivery",
+        },
+        unit_amount: ADDON_CODE_REVIEW_CENTS,
+      },
+      quantity: 1,
+    });
+  }
+
+  const totalBilledCents = estimatedCostCents + addonTotalCents(addons);
+
   const clientUrl = process.env.CLIENT_URL || "http://localhost:5175";
 
   const migration = await db("migrations").where({ id: migrationId }).first();
@@ -80,6 +132,7 @@ export async function createCheckoutForMigration(
     customer: customerId,
     mode: "payment",
     line_items: lineItems,
+    allow_promotion_codes: true,
     metadata: { migrationId, userId },
     payment_intent_data: { receipt_email: email },
     success_url: `${clientUrl}/project/${projectId}/migration/${migrationId}?paid=true`,
@@ -92,7 +145,7 @@ export async function createCheckoutForMigration(
     input_tokens: 0,
     output_tokens: 0,
     raw_cost_cents: 0,
-    billed_cost_cents: estimatedCostCents,
+    billed_cost_cents: totalBilledCents,
     markup_multiplier: parseFloat(process.env.TOKEN_MARKUP_MULTIPLIER || "4"),
     stripe_invoice_id: session.id,
     status: "pending",

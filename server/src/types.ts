@@ -18,6 +18,9 @@ export type MigrationStatus =
   | "building"
   | "fixing"
   | "budget_exceeded"
+  | "pending_review"
+  | "reviewing"
+  | "reviewed"
   | "failed";
 
 export type MigrationFileStatus =
@@ -27,9 +30,19 @@ export type MigrationFileStatus =
   | "skipped"
   | "failed";
 
-export type DetectedPlatform = "base44" | "lovable" | "replit" | "bolt" | "unknown";
+export type DetectedPlatform =
+  | "base44"
+  | "lovable"
+  | "replit"
+  | "bolt"
+  | "unknown";
 
-export type SupabaseService = "database" | "auth" | "storage" | "edge_functions" | "realtime";
+export type SupabaseService =
+  | "database"
+  | "auth"
+  | "storage"
+  | "edge_functions"
+  | "realtime";
 
 export interface User {
   id: string;
@@ -84,6 +97,8 @@ export interface Migration {
   output_branch: string | null;
   error_message: string | null;
   migration_log: MigrationLogEntry[];
+  addon_data_migration: boolean;
+  addon_code_review: boolean;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
@@ -135,5 +150,4 @@ export const ANTHROPIC_PRICING = {
   "claude-opus-4-7": { input: 500, output: 2500 },
   "claude-opus-4-6-20250115": { input: 500, output: 2500 },
   "claude-sonnet-4-6": { input: 300, output: 1500 },
-  "claude-haiku-4-5-20241022": { input: 80, output: 400 },
 } as const;

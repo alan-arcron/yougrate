@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, CheckCircle2, Triangle, CreditCard, ExternalLink } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Triangle, CreditCard, ExternalLink, RefreshCw } from "lucide-react";
 import { GithubIcon } from "@/components/icons";
 import { toast } from "sonner";
 
@@ -22,6 +22,8 @@ export default function Settings() {
   const [githubUsername, setGithubUsername] = useState("");
   const [savingGithub, setSavingGithub] = useState(false);
   const [openingPortal, setOpeningPortal] = useState(false);
+  const [reconnectingGithub, setReconnectingGithub] = useState(false);
+  const [reconnectingVercel, setReconnectingVercel] = useState(false);
 
   async function saveVercelToken() {
     setSavingVercel(true);
@@ -72,16 +74,36 @@ export default function Settings() {
             <CardDescription>Connect your GitHub account to import repos</CardDescription>
           </CardHeader>
           <CardContent>
-            {profile?.github_connected ? (
-              <div className="flex items-center gap-2 text-sm">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Connected as <strong>{profile.github_username}</strong></span>
+            {profile?.github_connected && !reconnectingGithub ? (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <span>Connected as <strong>{profile.github_username}</strong></span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setReconnectingGithub(true)}
+                >
+                  <RefreshCw className="mr-1.5 h-3 w-3" />
+                  Reconnect
+                </Button>
               </div>
             ) : (
               <div className="space-y-4">
+                {reconnectingGithub && (
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground">
+                      Currently connected as <strong>{profile?.github_username}</strong>. Connect a different account below.
+                    </p>
+                    <Button variant="ghost" size="sm" onClick={() => setReconnectingGithub(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                )}
                 <Button onClick={signInWithGitHub} variant="outline">
                   <GithubIcon className="mr-2 h-4 w-4" />
-                  Connect via OAuth
+                  {reconnectingGithub ? "Reconnect via OAuth" : "Connect via OAuth"}
                 </Button>
 
                 <Separator />
@@ -108,7 +130,10 @@ export default function Settings() {
                     />
                   </div>
                   <Button
-                    onClick={saveGithubToken}
+                    onClick={async () => {
+                      await saveGithubToken();
+                      setReconnectingGithub(false);
+                    }}
                     disabled={!githubToken || !githubUsername || savingGithub}
                     size="sm"
                   >
@@ -130,13 +155,33 @@ export default function Settings() {
             <CardDescription>Connect Vercel to deploy migrated apps</CardDescription>
           </CardHeader>
           <CardContent>
-            {profile?.vercel_connected ? (
-              <div className="flex items-center gap-2 text-sm">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Vercel connected</span>
+            {profile?.vercel_connected && !reconnectingVercel ? (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <span>Vercel connected</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setReconnectingVercel(true)}
+                >
+                  <RefreshCw className="mr-1.5 h-3 w-3" />
+                  Reconnect
+                </Button>
               </div>
             ) : (
               <div className="space-y-3">
+                {reconnectingVercel && (
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground">
+                      Vercel is currently connected. Paste a new token to replace it.
+                    </p>
+                    <Button variant="ghost" size="sm" onClick={() => setReconnectingVercel(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label>Vercel API Token</Label>
                   <Input
@@ -147,13 +192,16 @@ export default function Settings() {
                   />
                   <p className="text-xs text-muted-foreground">
                     Get your token at{" "}
-                    <a href="https://vercel.com/account/tokens" target="_blank" className="underline">
+                    <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener noreferrer" className="underline">
                       vercel.com/account/tokens
                     </a>
                   </p>
                 </div>
                 <Button
-                  onClick={saveVercelToken}
+                  onClick={async () => {
+                    await saveVercelToken();
+                    setReconnectingVercel(false);
+                  }}
                   disabled={!vercelToken || savingVercel}
                   size="sm"
                 >

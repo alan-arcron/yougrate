@@ -80,8 +80,12 @@ router.post("/tickets", ticketLimiter, optionalAuth, validateBody(createTicketSc
     })
     .returning("*");
 
-  sendSupportNotification(ticket).catch(() => {});
-  sendTicketConfirmation(ticket).catch(() => {});
+  sendSupportNotification(ticket).catch((err) =>
+    console.error("[support] Admin notification email failed:", err instanceof Error ? err.message : err),
+  );
+  sendTicketConfirmation(ticket).catch((err) =>
+    console.error("[support] Confirmation email failed:", err instanceof Error ? err.message : err),
+  );
 
   res.status(201).json(ticket);
 });

@@ -94,6 +94,7 @@ Respond in this exact JSON format (no markdown fences):
   try {
     parsed = JSON.parse(text);
   } catch {
+    console.warn(`[ai] Failed to parse analysis response for ${filePath}: ${text.slice(0, 200)}`);
     parsed = { needs_migration: false, reason: "Could not parse analysis" };
   }
 
@@ -239,6 +240,7 @@ Only include files that need changes.`,
     const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "");
     parsed = JSON.parse(cleaned);
   } catch {
+    console.warn(`[ai] Failed to parse build-fix response: ${text.slice(0, 200)}`);
     parsed = { fixes: {} };
   }
 
@@ -261,6 +263,60 @@ Only include files that need changes.`,
 
   return {
     fixes,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+  };
+}
+
+export async function generateSupabaseSchema(
+  sourceFiles: Map<string, string>,
+  platform: DetectedPlatform,
+): Promise<AIResponse> {
+  const anthropic = getClient();
+
+  const fileList = Array.from(sourceFiles.entries())
+    .map(([path, content]) => `### ${path}\n\`\`\`\n${content.substring(0, 6000)}\n\`\`\``)
+    .join("\n\n");
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    system: "You are a database schema migration expert. You output only valid SQL that can be run directly in a Supabase SQL editor. Never wrap output in markdown code fences.",
+    messages: [
+      {
+        role: "user",
+        content: `Analyze the following source code from a "${platform}" application and generate a complete Supabase SQL migration file.
+
+## Source Files (containing database operations)
+${fileList}
+
+## Instructions
+1. Infer ALL database tables, columns, types, and relationships from the source code
+2. Generate CREATE TABLE statements with proper PostgreSQL types
+3. Add foreign key constraints where relationships are detected
+4. Create indexes for columns used in queries/filters
+5. Generate Row Level Security (RLS) policies based on detected auth patterns
+6. Include ENABLE ROW LEVEL SECURITY for each table
+7. Add helpful comments describing each table's purpose
+
+## Output Format
+Output a single SQL migration file. Start with:
+-- Supabase SQL Migration
+-- Generated from ${platform} source code
+-- Tables, RLS policies, and indexes
+
+Then the SQL statements in order: extensions, tables, indexes, RLS policies.
+
+CRITICAL: Output raw SQL only. No markdown fences. No explanations before or after the SQL.`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  return {
+    content: stripMarkdownFences(text).trim(),
     inputTokens: response.usage.input_tokens,
     outputTokens: response.usage.output_tokens,
   };
