@@ -1,4 +1,8 @@
-import express, { type Request, type Response, type NextFunction } from "express";
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -43,119 +47,161 @@ app.use(
 
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 100,
+  limit: 1000,
   standardHeaders: "draft-8",
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later" },
+  message: { error: "Too many global requests, please try again later" },
 });
 
 const strictLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: 50,
   standardHeaders: "draft-8",
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later" },
+  message: { error: "Too many strict requests, please try again later" },
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 30,
+  limit: 200,
   standardHeaders: "draft-8",
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later" },
+  message: { error: "Too many auth requests, please try again later" },
 });
 
 // Stripe webhook needs raw body — must be before express.json()
-app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
-  const sig = req.headers["stripe-signature"] as string;
-  const secret = process.env.STRIPE_WEBHOOK_SECRET || "";
+app.post(
+  "/api/webhooks/stripe",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"] as string;
+    const secret = process.env.STRIPE_WEBHOOK_SECRET || "";
 
-  try {
-    const event = getRawStripe().webhooks.constructEvent(req.body, sig, secret);
+    try {
+      const event = getRawStripe().webhooks.constructEvent(
+        req.body,
+        sig,
+        secret,
+      );
 
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const type = session.metadata?.type;
-      const migrationId = await handleCheckoutCompleted(session);
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+        const type = session.metadata?.type;
+        const migrationId = await handleCheckoutCompleted(session);
 
-      if (type === "migration_overage" && migrationId) {
-        const migration = await db("migrations").where({ id: migrationId }).first();
-        if (migration?.status === "budget_exceeded") {
-          const filesCompleted = migration.files_migrated || 0;
-          const filesRemaining = (migration.files_to_migrate || 0) - filesCompleted;
-          const tokensUsed = (migration.actual_input_tokens || 0) + (migration.actual_output_tokens || 0);
-          const tokensPerFile = filesCompleted > 0 ? tokensUsed / filesCompleted : 0;
-          const projectedRemaining = Math.ceil(tokensPerFile * filesRemaining * 1.1);
-          const inputRatio = tokensUsed > 0 ? (migration.actual_input_tokens || 0) / tokensUsed : 0.5;
-          const newEstInput = (migration.actual_input_tokens || 0) + Math.ceil(projectedRemaining * inputRatio);
-          const newEstOutput = (migration.actual_output_tokens || 0) + (projectedRemaining - Math.ceil(projectedRemaining * inputRatio));
-
-          const billingEvent = await db("billing_events")
-            .where({ stripe_invoice_id: session.id })
+        if (type === "migration_overage" && migrationId) {
+          const migration = await db("migrations")
+            .where({ id: migrationId })
             .first();
+          if (migration?.status === "budget_exceeded") {
+            const filesCompleted = migration.files_migrated || 0;
+            const filesRemaining =
+              (migration.files_to_migrate || 0) - filesCompleted;
+            const tokensUsed =
+              (migration.actual_input_tokens || 0) +
+              (migration.actual_output_tokens || 0);
+            const tokensPerFile =
+              filesCompleted > 0 ? tokensUsed / filesCompleted : 0;
+            const projectedRemaining = Math.ceil(
+              tokensPerFile * filesRemaining * 1.1,
+            );
+            const inputRatio =
+              tokensUsed > 0
+                ? (migration.actual_input_tokens || 0) / tokensUsed
+                : 0.5;
+            const newEstInput =
+              (migration.actual_input_tokens || 0) +
+              Math.ceil(projectedRemaining * inputRatio);
+            const newEstOutput =
+              (migration.actual_output_tokens || 0) +
+              (projectedRemaining - Math.ceil(projectedRemaining * inputRatio));
 
+            const billingEvent = await db("billing_events")
+              .where({ stripe_invoice_id: session.id })
+              .first();
+
+            const updated = await db("migrations")
+              .where({ id: migrationId, status: "budget_exceeded" })
+              .update({
+                status: "confirmed",
+                estimated_input_tokens: newEstInput,
+                estimated_output_tokens: newEstOutput,
+                estimated_cost_cents:
+                  (migration.estimated_cost_cents || 0) +
+                  (billingEvent?.billed_cost_cents || 0),
+                error_message: null,
+              });
+
+            if (updated > 0) {
+              runMigration(migrationId).catch((err) => {
+                console.error("[migration] Overage migration error:", err);
+              });
+              console.log(
+                `[webhook] Overage paid, resuming migration ${migrationId.slice(0, 8)}`,
+              );
+            }
+          }
+        } else if (migrationId) {
           const updated = await db("migrations")
-            .where({ id: migrationId, status: "budget_exceeded" })
-            .update({
-              status: "confirmed",
-              estimated_input_tokens: newEstInput,
-              estimated_output_tokens: newEstOutput,
-              estimated_cost_cents: (migration.estimated_cost_cents || 0) + (billingEvent?.billed_cost_cents || 0),
-              error_message: null,
-            });
+            .where({ id: migrationId, status: "estimated" })
+            .update({ status: "confirmed" });
 
           if (updated > 0) {
             runMigration(migrationId).catch((err) => {
-              console.error("[migration] Overage migration error:", err);
+              console.error("[migration] Migration error:", err);
             });
-            console.log(`[webhook] Overage paid, resuming migration ${migrationId.slice(0, 8)}`);
+            console.log(
+              `[webhook] Payment received, starting migration ${migrationId.slice(0, 8)}`,
+            );
+          } else {
+            console.log(
+              `[webhook] Migration ${migrationId.slice(0, 8)} already confirmed, skipping duplicate`,
+            );
           }
         }
-      } else if (migrationId) {
-        const updated = await db("migrations")
-          .where({ id: migrationId, status: "estimated" })
-          .update({ status: "confirmed" });
-
-        if (updated > 0) {
-          runMigration(migrationId).catch((err) => {
-            console.error("[migration] Migration error:", err);
+      } else if (event.type === "checkout.session.expired") {
+        const session = event.data.object;
+        await db("billing_events")
+          .where({ stripe_invoice_id: session.id, status: "pending" })
+          .update({ status: "failed" });
+        console.log(`[webhook] Checkout expired: ${session.id}`);
+      } else if (event.type === "charge.refunded") {
+        const charge = event.data.object;
+        const paymentIntentId =
+          typeof charge.payment_intent === "string"
+            ? charge.payment_intent
+            : charge.payment_intent?.id;
+        if (paymentIntentId) {
+          const sessions = await getRawStripe().checkout.sessions.list({
+            payment_intent: paymentIntentId,
+            limit: 1,
           });
-          console.log(`[webhook] Payment received, starting migration ${migrationId.slice(0, 8)}`);
-        } else {
-          console.log(`[webhook] Migration ${migrationId.slice(0, 8)} already confirmed, skipping duplicate`);
+          const session = sessions.data[0];
+          if (session) {
+            await db("billing_events")
+              .where({ stripe_invoice_id: session.id })
+              .update({ status: "refunded" });
+            console.log(`[webhook] Charge refunded for session ${session.id}`);
+          }
         }
+      } else if (event.type === "charge.dispute.created") {
+        const dispute = event.data.object;
+        const chargeId =
+          typeof dispute.charge === "string"
+            ? dispute.charge
+            : dispute.charge?.id;
+        console.error(
+          `[webhook] DISPUTE created on charge ${chargeId}. Amount: ${dispute.amount}. Reason: ${dispute.reason}`,
+        );
       }
-    } else if (event.type === "checkout.session.expired") {
-      const session = event.data.object;
-      await db("billing_events")
-        .where({ stripe_invoice_id: session.id, status: "pending" })
-        .update({ status: "failed" });
-      console.log(`[webhook] Checkout expired: ${session.id}`);
-    } else if (event.type === "charge.refunded") {
-      const charge = event.data.object;
-      const paymentIntentId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
-      if (paymentIntentId) {
-        const sessions = await getRawStripe().checkout.sessions.list({ payment_intent: paymentIntentId, limit: 1 });
-        const session = sessions.data[0];
-        if (session) {
-          await db("billing_events")
-            .where({ stripe_invoice_id: session.id })
-            .update({ status: "refunded" });
-          console.log(`[webhook] Charge refunded for session ${session.id}`);
-        }
-      }
-    } else if (event.type === "charge.dispute.created") {
-      const dispute = event.data.object;
-      const chargeId = typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id;
-      console.error(`[webhook] DISPUTE created on charge ${chargeId}. Amount: ${dispute.amount}. Reason: ${dispute.reason}`);
-    }
 
-    res.json({ received: true });
-  } catch (err) {
-    console.error("[webhook] Error:", err);
-    res.status(400).send("Webhook error");
-  }
-});
+      res.json({ received: true });
+    } catch (err) {
+      console.error("[webhook] Error:", err);
+      res.status(400).send("Webhook error");
+    }
+  },
+);
 
 app.use(express.json({ limit: "5mb" }));
 app.use(requestLogger);
