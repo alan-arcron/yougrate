@@ -30,6 +30,7 @@ import {
   Database,
   UserCheck,
   Info,
+  ExternalLink,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -92,6 +93,9 @@ export default function MigrationView() {
   const [pushType, setPushType] = useState<"new_repo" | "branch">("new_repo");
   const [addonDataMigration, setAddonDataMigration] = useState(false);
   const [addonCodeReview, setAddonCodeReview] = useState(false);
+  const [postDeployChecks, setPostDeployChecks] = useState<
+    Record<string, boolean>
+  >({});
 
   async function fetchMigration() {
     try {
@@ -111,7 +115,14 @@ export default function MigrationView() {
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | null = null;
 
-    const TERMINAL_STATUSES = new Set(["estimated", "completed", "failed", "budget_exceeded", "pending_review", "reviewed"]);
+    const TERMINAL_STATUSES = new Set([
+      "estimated",
+      "completed",
+      "failed",
+      "budget_exceeded",
+      "pending_review",
+      "reviewed",
+    ]);
 
     const load = async () => {
       try {
@@ -275,7 +286,8 @@ export default function MigrationView() {
   const deployed = migration.is_deployed === true;
   const isCompleted = migration.status === "completed";
   const isReviewed = migration.status === "reviewed";
-  const isPendingReview = migration.status === "pending_review" || migration.status === "reviewing";
+  const isPendingReview =
+    migration.status === "pending_review" || migration.status === "reviewing";
   const isFailed = migration.status === "failed";
 
   return (
@@ -383,137 +395,205 @@ export default function MigrationView() {
                 </div>
               )}
 
-            {isEstimated && (() => {
-              const addonCents = (addonDataMigration ? 2500 : 0) + (addonCodeReview ? 7500 : 0);
-              const totalCents = migration.estimated_cost_cents + addonCents;
-              return (
-              <>
-                <Separator className="my-4" />
-                <div className="flex items-center gap-2 mb-3">
-                  <DollarSign className="h-5 w-5 text-green-600" />
-                  <div>
-                    <p className="text-sm font-medium">Estimated Cost</p>
-                    <p className="text-2xl font-bold">
-                      ${(totalCents / 100).toFixed(2)}
-                    </p>
-                    <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
-                      <p>$20.00 base fee</p>
-                      <p>
-                        $
-                        {(
-                          (migration.estimated_cost_cents - 2000) /
-                          100
-                        ).toFixed(2)}{" "}
-                        token usage (~
-                        {(
-                          migration.estimated_input_tokens +
-                          migration.estimated_output_tokens
-                        ).toLocaleString()}{" "}
-                        tokens)
-                      </p>
-                      {addonDataMigration && <p>$25.00 data migration</p>}
-                      {addonCodeReview && <p>$75.00 code review</p>}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
-                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Optional Add-ons</p>
-                  <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={addonDataMigration}
-                      onChange={(e) => setAddonDataMigration(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 rounded border-border"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium flex items-center gap-1.5">
-                          <Database className="h-3.5 w-3.5" />
-                          Data Migration
-                        </span>
-                        <span className="text-sm font-semibold">+$25</span>
+            {isEstimated &&
+              (() => {
+                const addonCents =
+                  (addonDataMigration ? 2500 : 0) +
+                  (addonCodeReview ? 7500 : 0);
+                const totalCents = migration.estimated_cost_cents + addonCents;
+                return (
+                  <>
+                    <Separator className="my-4" />
+                    <div className="flex items-center gap-2 mb-3">
+                      <DollarSign className="h-5 w-5 text-green-600" />
+                      <div>
+                        <p className="text-sm font-medium">Estimated Cost</p>
+                        <p className="text-2xl font-bold">
+                          ${(totalCents / 100).toFixed(2)}
+                        </p>
+                        <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
+                          <p>$20.00 base fee</p>
+                          <p>
+                            $
+                            {(
+                              (migration.estimated_cost_cents - 2000) /
+                              100
+                            ).toFixed(2)}{" "}
+                            token usage (~
+                            {(
+                              migration.estimated_input_tokens +
+                              migration.estimated_output_tokens
+                            ).toLocaleString()}{" "}
+                            tokens)
+                          </p>
+                          {addonDataMigration && <p>$25.00 data migration</p>}
+                          {addonCodeReview && <p>$75.00 code review</p>}
+                        </div>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        AI analyzes your source database schema and generates Supabase SQL migration files (CREATE TABLE, RLS policies, indexes)
+                    </div>
+
+                    <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
+                      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Optional Add-ons
+                      </p>
+                      <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={addonDataMigration}
+                          onChange={(e) =>
+                            setAddonDataMigration(e.target.checked)
+                          }
+                          className="mt-0.5 h-4 w-4 rounded border-border"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium flex items-center gap-1.5">
+                              <Database className="h-3.5 w-3.5" />
+                              Data Migration
+                            </span>
+                            <span className="text-sm font-semibold">+$25</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                            AI reads your source code to reverse-engineer the
+                            database schema your app depends on, then generates
+                            a ready-to-run Supabase SQL migration file
+                            including:
+                          </p>
+                          <ul className="text-xs text-muted-foreground mt-1.5 space-y-0.5 list-disc list-inside">
+                            <li>
+                              CREATE TABLE statements with proper PostgreSQL
+                              types and constraints
+                            </li>
+                            <li>
+                              Foreign key relationships and indexes based on
+                              detected query patterns
+                            </li>
+                            <li>
+                              Row Level Security (RLS) policies matched to your
+                              auth flow
+                            </li>
+                          </ul>
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            The output lands in{" "}
+                            <code className="bg-muted px-1 rounded text-[11px]">
+                              supabase/migrations/001_initial_schema.sql
+                            </code>{" "}
+                            and can be applied directly via the Supabase SQL
+                            editor or CLI.
+                          </p>
+                        </div>
+                      </label>
+                      <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={addonCodeReview}
+                          onChange={(e) => setAddonCodeReview(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 rounded border-border"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium flex items-center gap-1.5">
+                              <UserCheck className="h-3.5 w-3.5" />
+                              Senior Engineer Code Review
+                            </span>
+                            <span className="text-sm font-semibold">+$75</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                            A senior engineer from our team manually reviews
+                            your migrated codebase before delivery. The review
+                            covers:
+                          </p>
+                          <ul className="text-xs text-muted-foreground mt-1.5 space-y-0.5 list-disc list-inside">
+                            <li>
+                              Security posture &mdash; exposed keys, auth gaps,
+                              injection risks
+                            </li>
+                            <li>
+                              Architecture &mdash; proper Supabase client usage,
+                              code organization, separation of concerns
+                            </li>
+                            <li>
+                              Performance &mdash; unnecessary re-renders,
+                              missing indexes, N+1 queries
+                            </li>
+                            <li>
+                              Bug detection &mdash; broken imports, dead code
+                              paths, type mismatches
+                            </li>
+                            <li>
+                              Scalability &mdash; connection pooling, caching
+                              opportunities, rate-limit readiness
+                            </li>
+                            <li>
+                              Migration completeness &mdash; no leftover
+                              platform references or orphaned config
+                            </li>
+                          </ul>
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            Your migration will be held in a &ldquo;pending
+                            review&rdquo; state until the review is complete.
+                            Use code <strong>ARCRON</strong> at checkout for a
+                            free review.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+
+                    <div className="flex justify-end">
+                      <Button
+                        size="lg"
+                        onClick={handlePayAndStart}
+                        disabled={paying}
+                      >
+                        {paying ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <CreditCard className="mr-2 h-4 w-4" />
+                        )}
+                        {paying
+                          ? "Redirecting..."
+                          : `Pay $${(totalCents / 100).toFixed(2)} & Start`}
+                      </Button>
+                    </div>
+
+                    <div className="mt-4 p-3 rounded-lg bg-muted/50 border border-border">
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        <strong className="text-foreground">
+                          Please read before proceeding:
+                        </strong>{" "}
+                        Yougrate uses AI to rewrite your code. While we make
+                        best-effort attempts to produce a working migration —
+                        including automatic build error detection and up to 3
+                        AI-driven fix cycles — the output is not guaranteed to
+                        be error-free or production-ready. You may need to
+                        review and adjust the migrated code yourself. Yougrate
+                        is not responsible for bugs, data loss, or downtime
+                        resulting from migrated code. Your original repository
+                        is never modified. By proceeding with payment, you
+                        acknowledge these limitations and agree that all sales
+                        are final. Need help with your migrated code?{" "}
+                        <a
+                          href="https://arcron.systems"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                        >
+                          Arcron Information Systems
+                        </a>{" "}
+                        offers professional software services that can assist
+                        with any issues — reach out at{" "}
+                        <a
+                          href="mailto:yougrate@arcron.systems"
+                          className="text-primary hover:underline"
+                        >
+                          yougrate@arcron.systems
+                        </a>
+                        .
                       </p>
                     </div>
-                  </label>
-                  <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={addonCodeReview}
-                      onChange={(e) => setAddonCodeReview(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 rounded border-border"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium flex items-center gap-1.5">
-                          <UserCheck className="h-3.5 w-3.5" />
-                          Senior Engineer Code Review
-                        </span>
-                        <span className="text-sm font-semibold">+$75</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        A human senior engineer reviews your migrated code before delivery
-                      </p>
-                    </div>
-                  </label>
-                </div>
-
-                <div className="flex justify-end">
-                  <Button
-                    size="lg"
-                    onClick={handlePayAndStart}
-                    disabled={paying}
-                  >
-                    {paying ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <CreditCard className="mr-2 h-4 w-4" />
-                    )}
-                    {paying ? "Redirecting..." : `Pay $${(totalCents / 100).toFixed(2)} & Start`}
-                  </Button>
-                </div>
-
-                <div className="mt-4 p-3 rounded-lg bg-muted/50 border border-border">
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    <strong className="text-foreground">
-                      Please read before proceeding:
-                    </strong>{" "}
-                    Yougrate uses AI to rewrite your code. While we make
-                    best-effort attempts to produce a working migration —
-                    including automatic build error detection and up to 3
-                    AI-driven fix cycles — the output is not guaranteed to be
-                    error-free or production-ready. You may need to review and
-                    adjust the migrated code yourself. Yougrate is not
-                    responsible for bugs, data loss, or downtime resulting from
-                    migrated code. Your original repository is never modified.
-                    By proceeding with payment, you acknowledge these
-                    limitations and agree that all sales are final. Need help
-                    with your migrated code?{" "}
-                    <a
-                      href="https://arcron.systems"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary hover:underline"
-                    >
-                      Arcron Information Systems
-                    </a>{" "}
-                    offers professional software services that can assist with
-                    any issues — reach out at{" "}
-                    <a
-                      href="mailto:yougrate@arcron.systems"
-                      className="text-primary hover:underline"
-                    >
-                      yougrate@arcron.systems
-                    </a>
-                    .
-                  </p>
-                </div>
-              </>
-              );
-            })()}
+                  </>
+                );
+              })()}
           </CardContent>
         </Card>
       )}
@@ -536,7 +616,8 @@ export default function MigrationView() {
             </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Info className="h-3 w-3 shrink-0" />
-              You can safely close this tab or refresh the page — your analysis will continue running on our servers.
+              You can safely close this tab or refresh the page — your analysis
+              will continue running on our servers.
             </div>
             <div className="pt-2 border-t">
               <p className="text-xs text-muted-foreground mb-2">
@@ -588,7 +669,8 @@ export default function MigrationView() {
               <div className="mt-4 pt-4 border-t space-y-3">
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Info className="h-3 w-3 shrink-0" />
-                  You can safely close this tab or refresh the page — your migration will continue running on our servers.
+                  You can safely close this tab or refresh the page — your
+                  migration will continue running on our servers.
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Migration stalled or disconnected? Resume from where it left
@@ -669,10 +751,15 @@ export default function MigrationView() {
             <div className="flex items-center gap-3">
               <UserCheck className="h-5 w-5 text-amber-500" />
               <div>
-                <p className="text-sm font-medium">Awaiting Senior Engineer Code Review</p>
+                <p className="text-sm font-medium">
+                  Awaiting Senior Engineer Code Review
+                </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Your migration is complete and has been queued for review by a senior engineer.
-                  {migration.status === "reviewing" ? " Review is in progress." : " We'll notify you when it's done."}
+                  Your migration is complete and has been queued for review by a
+                  senior engineer.
+                  {migration.status === "reviewing"
+                    ? " Review is in progress."
+                    : " We'll notify you when it's done."}
                 </p>
               </div>
             </div>
@@ -689,7 +776,8 @@ export default function MigrationView() {
               <div>
                 <p className="text-sm font-medium">Code Review Complete</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Your migrated code has been reviewed by a senior engineer and is ready for use.
+                  Your migrated code has been reviewed by a senior engineer and
+                  is ready for use.
                 </p>
               </div>
             </div>
@@ -818,6 +906,173 @@ export default function MigrationView() {
         </Card>
       )}
 
+      {/* Post-deploy checklist */}
+      {deployed && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-lg">Post-Deploy Checklist</CardTitle>
+            <CardDescription>
+              Complete these steps to make your migrated app production-ready
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {(() => {
+              const items = [
+                {
+                  id: "env_vars",
+                  title: "Set environment variables in Vercel",
+                  detail: (
+                    <>
+                      Your app needs{" "}
+                      <code className="bg-muted px-1 rounded text-xs">
+                        NEXT_PUBLIC_SUPABASE_URL
+                      </code>{" "}
+                      and{" "}
+                      <code className="bg-muted px-1 rounded text-xs">
+                        NEXT_PUBLIC_SUPABASE_ANON_KEY
+                      </code>{" "}
+                      (or the{" "}
+                      <code className="bg-muted px-1 rounded text-xs">
+                        VITE_
+                      </code>{" "}
+                      equivalents for Vite apps). Add any other env vars your
+                      app uses.
+                    </>
+                  ),
+                  link: {
+                    label: "Vercel Environment Variables",
+                    url: "https://vercel.com/docs/projects/environment-variables",
+                  },
+                },
+                {
+                  id: "supabase_auth",
+                  title: "Configure Supabase auth redirect URLs",
+                  detail: (
+                    <>
+                      In your Supabase dashboard under{" "}
+                      <strong>Authentication &rarr; URL Configuration</strong>,
+                      add your Vercel domain to the{" "}
+                      <strong>Redirect URLs</strong> list (e.g.{" "}
+                      <code className="bg-muted px-1 rounded text-xs">
+                        https://your-app.vercel.app/**
+                      </code>
+                      ).
+                    </>
+                  ),
+                  link: {
+                    label: "Supabase Auth Settings",
+                    url: "https://supabase.com/dashboard/project/_/auth/url-configuration",
+                  },
+                },
+                {
+                  id: "custom_domain",
+                  title: "Add a custom domain (optional)",
+                  detail:
+                    "Point your domain to Vercel for a branded URL. Update Supabase redirect URLs if you do.",
+                  link: {
+                    label: "Vercel Custom Domains",
+                    url: "https://vercel.com/docs/projects/domains",
+                  },
+                },
+                {
+                  id: "supabase_rls",
+                  title: "Review Row Level Security policies",
+                  detail:
+                    "Ensure RLS is enabled on all tables and policies match your auth requirements. Without RLS, your data is publicly accessible.",
+                  link: {
+                    label: "Supabase RLS Guide",
+                    url: "https://supabase.com/docs/guides/database/postgres/row-level-security",
+                  },
+                },
+                {
+                  id: "test_auth",
+                  title: "Test login and signup flows",
+                  detail:
+                    "Sign up a test user, verify email confirmation works, and test all auth-gated pages. Check browser console for errors.",
+                },
+                {
+                  id: "test_data",
+                  title: "Verify database operations",
+                  detail:
+                    "Create, read, update, and delete records through your app. Check that data persists correctly in Supabase.",
+                },
+                {
+                  id: "check_builds",
+                  title: "Review Vercel build logs",
+                  detail:
+                    "Look for warnings about missing dependencies, large bundle sizes, or deprecated APIs that could cause issues.",
+                  link: {
+                    label: "Vercel Deployments",
+                    url: "https://vercel.com/dashboard",
+                  },
+                },
+                {
+                  id: "cleanup",
+                  title: "Remove leftover platform references",
+                  detail:
+                    "Search for any remaining mentions of the original platform in README, package.json metadata, or HTML meta tags.",
+                },
+              ];
+
+              const checked =
+                Object.values(postDeployChecks).filter(Boolean).length;
+
+              return (
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground mb-3">
+                    {checked}/{items.length} completed
+                  </p>
+                  {items.map((item) => (
+                    <label
+                      key={item.id}
+                      className={`flex items-start gap-3 p-3 rounded-md border transition-colors ${
+                        postDeployChecks[item.id]
+                          ? "bg-muted/30 border-border/50"
+                          : "bg-background border-border hover:bg-muted/30"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={postDeployChecks[item.id] || false}
+                        onChange={(e) =>
+                          setPostDeployChecks((prev) => ({
+                            ...prev,
+                            [item.id]: e.target.checked,
+                          }))
+                        }
+                        className="mt-0.5 h-4 w-4 rounded border-border shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className={`text-sm font-medium ${postDeployChecks[item.id] ? "line-through text-muted-foreground" : ""}`}
+                        >
+                          {item.title}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                          {item.detail}
+                        </p>
+                        {item.link && (
+                          <a
+                            href={item.link.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {item.link.label}
+                            <ExternalLink className="h-2.5 w-2.5" />
+                          </a>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Build progress (Vercel build + AI fix loop) */}
       {(isBuilding || isFixing) && (
         <Card className="mb-6">
@@ -839,7 +1094,8 @@ export default function MigrationView() {
             </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Info className="h-3 w-3 shrink-0" />
-              You can safely close this tab or refresh the page — your build will continue running on our servers.
+              You can safely close this tab or refresh the page — your build
+              will continue running on our servers.
             </div>
           </CardContent>
         </Card>
