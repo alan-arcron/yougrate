@@ -24,7 +24,6 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
-  ArrowLeft,
   Cpu,
   TrendingUp,
   Eye,
@@ -312,14 +311,6 @@ export default function Admin() {
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
-      <Button
-        variant="ghost"
-        onClick={() => navigate("/dashboard")}
-        className="mb-4"
-      >
-        <ArrowLeft className="mr-2 h-4 w-4" />
-        Back to Dashboard
-      </Button>
       <h1 className="text-3xl font-bold mb-8">Admin Dashboard</h1>
 
       {/* Stats */}

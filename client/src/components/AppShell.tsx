@@ -30,6 +30,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <Button
               variant="ghost"
               size="sm"
+              onClick={() => navigate("/dashboard")}
+            >
+              Dashboard
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => navigate("/support")}
             >
               Support

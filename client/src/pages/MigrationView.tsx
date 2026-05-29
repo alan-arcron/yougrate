@@ -90,7 +90,7 @@ export default function MigrationView() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [pollKey, setPollKey] = useState(0);
   const [repoName, setRepoName] = useState("");
-  const [pushType, setPushType] = useState<"new_repo" | "branch">("new_repo");
+  const [pushType, setPushType] = useState<"new" | "branch">("new");
   const [addonDataMigration, setAddonDataMigration] = useState(false);
   const [addonCodeReview, setAddonCodeReview] = useState(false);
   const [postDeployChecks, setPostDeployChecks] = useState<
@@ -809,9 +809,9 @@ export default function MigrationView() {
           <CardContent className="space-y-4">
             <div className="flex gap-2">
               <Button
-                variant={pushType === "new_repo" ? "default" : "outline"}
+                variant={pushType === "new" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setPushType("new_repo")}
+                onClick={() => setPushType("new")}
               >
                 <GitFork className="mr-2 h-4 w-4" />
                 New Repository
@@ -826,7 +826,7 @@ export default function MigrationView() {
               </Button>
             </div>
 
-            {pushType === "new_repo" && (
+            {pushType === "new" && (
               <div>
                 <Label htmlFor="repo-name">Repository Name</Label>
                 <Input
@@ -845,7 +845,7 @@ export default function MigrationView() {
             <Button
               onClick={handlePush}
               disabled={
-                pushing || (pushType === "new_repo" && !repoName.trim())
+                pushing || (pushType === "new" && !repoName.trim())
               }
             >
               {pushing ? (

@@ -26,8 +26,11 @@ const createMigrationSchema = z.object({
 
 const pushSchema = z.object({
   output_type: z.enum(["new", "fork", "branch"]),
-  repo_name: z.string().min(1).max(200).regex(/^[a-zA-Z0-9._-]+$/, "Invalid repository name"),
-}).strip();
+  repo_name: z.string().min(1).max(200).regex(/^[a-zA-Z0-9._-]+$/, "Invalid repository name").optional(),
+}).strip().refine(
+  (d) => d.output_type !== "new" || !!d.repo_name,
+  { message: "repo_name is required for new repositories", path: ["repo_name"] },
+);
 
 const retrySchema = z.object({
   model: z.string().max(100).optional(),

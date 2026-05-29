@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, CheckCircle2, Triangle, CreditCard, ExternalLink, RefreshCw } from "lucide-react";
+import { CheckCircle2, Triangle, CreditCard, ExternalLink, RefreshCw } from "lucide-react";
 import { GithubIcon } from "@/components/icons";
 import { toast } from "sonner";
 
@@ -57,11 +57,6 @@ export default function Settings() {
 
   return (
       <div className="max-w-2xl mx-auto px-6 py-10">
-        <Button variant="ghost" onClick={() => navigate("/dashboard")} className="mb-6">
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Dashboard
-        </Button>
-
         <h1 className="text-3xl font-bold mb-8">Settings</h1>
 
         {/* GitHub Connection */}

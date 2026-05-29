@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Plus, ExternalLink, Loader2, Lock, CreditCard, Pencil, Check, X, Info } from "lucide-react";
+import { Plus, ExternalLink, Loader2, Lock, CreditCard, Pencil, Check, X, Info } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -89,11 +89,6 @@ export default function ProjectView() {
 
   return (
       <div className="max-w-4xl mx-auto px-6 py-10">
-        <Button variant="ghost" onClick={() => navigate("/dashboard")} className="mb-6">
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Dashboard
-        </Button>
-
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-3xl font-bold">{project.name}</h1>

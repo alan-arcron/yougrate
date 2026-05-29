@@ -12,7 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ArrowLeft, Search, Lock, Globe, Info, AlertCircle } from "lucide-react";
+import { Search, Lock, Globe, Info, AlertCircle } from "lucide-react";
 import { GithubIcon } from "@/components/icons";
 import { toast } from "sonner";
 
@@ -114,8 +114,7 @@ export default function NewProject() {
               className="w-full"
               onClick={() => navigate("/dashboard")}
             >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Dashboard
+              Go to Dashboard
             </Button>
           </CardContent>
         </Card>
@@ -125,15 +124,6 @@ export default function NewProject() {
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-10">
-      <Button
-        variant="ghost"
-        onClick={() => navigate("/dashboard")}
-        className="mb-6"
-      >
-        <ArrowLeft className="mr-2 h-4 w-4" />
-        Back
-      </Button>
-
       <h1 className="text-3xl font-bold mb-2">New Migration</h1>
       <p className="text-muted-foreground mb-8">
         Select a repository and configure your Supabase project
