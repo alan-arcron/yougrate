@@ -18,10 +18,18 @@ export async function getOrCreateCustomer(
   userId: string,
   email: string,
 ): Promise<string> {
-  const user = await db("users").where({ id: userId }).first();
-  if (user?.stripe_customer_id) return user.stripe_customer_id;
-
   const s = getStripe();
+  const user = await db("users").where({ id: userId }).first();
+
+  if (user?.stripe_customer_id) {
+    try {
+      await s.customers.retrieve(user.stripe_customer_id);
+      return user.stripe_customer_id;
+    } catch {
+      console.warn(`[billing] Stale Stripe customer ${user.stripe_customer_id} for user ${userId.slice(0, 8)}, creating new one`);
+    }
+  }
+
   const customer = await s.customers.create({
     email,
     metadata: { userId },
