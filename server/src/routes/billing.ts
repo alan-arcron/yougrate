@@ -1,7 +1,7 @@
 import { Router, Response } from "express";
 import { db } from "../db";
 import type { AuthRequest } from "../middleware/auth";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, isAdmin } from "../middleware/auth";
 import { getUserBillingSummary, createAnalysisUnlockCheckout, verifyCheckoutPaid, createBillingPortalSession } from "../services/billing";
 
 const router = Router();
@@ -12,6 +12,10 @@ router.get("/summary", requireAuth, async (req: AuthRequest, res: Response) => {
 });
 
 router.get("/analysis-quota", requireAuth, async (req: AuthRequest, res: Response) => {
+  if (isAdmin(req.userEmail)) {
+    res.json({ used: 0, limit: Infinity, remaining: Infinity, needs_payment: false });
+    return;
+  }
   const user = await db("users").where({ id: req.userId }).first();
   const used = user.free_analyses_used || 0;
   const limit = user.free_analyses_limit || 2;

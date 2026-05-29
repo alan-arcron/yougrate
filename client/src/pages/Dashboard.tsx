@@ -42,7 +42,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function Dashboard() {
-  const { profile } = useAuth();
+  const { profile, profileLoading } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -90,7 +90,7 @@ export default function Dashboard() {
         </Button>
       </div>
 
-      {loading ? (
+      {loading || profileLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
             <Card key={i} className="animate-pulse">

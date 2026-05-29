@@ -2,7 +2,7 @@ import { Router, Response } from "express";
 import { z } from "zod";
 import { db } from "../db";
 import type { AuthRequest } from "../middleware/auth";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, isAdmin } from "../middleware/auth";
 import { validateBody } from "../middleware/validate";
 import {
   runAnalysis,
@@ -73,26 +73,27 @@ router.post("/", requireAuth, validateBody(createMigrationSchema), async (req: A
     return;
   }
 
-  // Check analysis quota
-  const quota = await checkAnalysisQuota(req.userId!);
-  if (!quota.allowed) {
-    res.status(402).json({
-      error: "analysis_quota_exceeded",
-      message: "You've used all your free analyses. Pay to unlock more.",
-      used: quota.used,
-      limit: quota.limit,
-    });
-    return;
+  // Check analysis quota (admins are exempt)
+  if (!isAdmin(req.userEmail)) {
+    const quota = await checkAnalysisQuota(req.userId!);
+    if (!quota.allowed) {
+      res.status(402).json({
+        error: "analysis_quota_exceeded",
+        message: "You've used all your free analyses. Pay to unlock more.",
+        used: quota.used,
+        limit: quota.limit,
+      });
+      return;
+    }
+
+    await db("users")
+      .where({ id: req.userId })
+      .increment("free_analyses_used", 1);
   }
 
   const [migration] = await db("migrations")
     .insert({ project_id })
     .returning("*");
-
-  // Increment analysis usage
-  await db("users")
-    .where({ id: req.userId })
-    .increment("free_analyses_used", 1);
 
   // Start analysis in background
   runAnalysis(migration.id).catch((err) => {
@@ -177,6 +178,17 @@ router.post(
       addon_data_migration: addons.dataMigration,
       addon_code_review: addons.codeReview,
     });
+
+    if (isAdmin(req.userEmail)) {
+      await db("migrations")
+        .where({ id: migration.id })
+        .update({ status: "confirmed" });
+      runMigration(migration.id).catch((err) => {
+        console.error("[migration] Migration error:", err);
+      });
+      res.json({ paid: true, status: "confirmed" });
+      return;
+    }
 
     const totalTokens =
       migration.estimated_input_tokens + migration.estimated_output_tokens;
@@ -451,6 +463,17 @@ router.post(
       projectedRemainingOutput,
     );
     const overageCents = Math.max(remainingCost.tokenCostCents, 100);
+
+    if (isAdmin(req.userEmail)) {
+      await db("migrations")
+        .where({ id: migration.id })
+        .update({ status: "running" });
+      runMigration(migration.id).catch((err) => {
+        console.error("[migration] Migration error:", err);
+      });
+      res.json({ paid: true, status: "running" });
+      return;
+    }
 
     const { checkoutUrl } = await createCheckoutForOverage(
       req.userId!,

@@ -19,9 +19,8 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  profileLoading: boolean;
   signInWithGitHub: () => Promise<void>;
-  signInWithEmail: (email: string, password: string) => Promise<void>;
-  signUpWithEmail: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -33,9 +32,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(true);
 
   async function syncProfile(s?: Session | null) {
     const currentSession = s || session;
+    setProfileLoading(true);
     try {
       const p = await api.get<UserProfile>("/auth/me");
 
@@ -75,6 +76,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setProfile(p as unknown as UserProfile);
         }
       } catch { /* user will need to retry */ }
+    } finally {
+      setProfileLoading(false);
     }
   }
 
@@ -99,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       syncProfile(session);
     } else {
       setProfile(null);
+      setProfileLoading(false);
     }
   }, [session]);
 
@@ -116,16 +120,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const signInWithEmail = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-  };
-
-  const signUpWithEmail = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
-  };
-
   const signOut = async () => {
     await supabase.auth.signOut();
     setProfile(null);
@@ -138,9 +132,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         profile,
         loading,
+        profileLoading,
         signInWithGitHub,
-        signInWithEmail,
-        signUpWithEmail,
         signOut,
         refreshProfile,
       }}

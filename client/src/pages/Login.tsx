@@ -1,8 +1,5 @@
-import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Card,
   CardContent,
@@ -10,34 +7,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GithubIcon } from "@/components/icons";
-import { Mail } from "lucide-react";
 
 export default function Login() {
-  const { signInWithGitHub, signInWithEmail, signUpWithEmail } = useAuth();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [signupSuccess, setSignupSuccess] = useState(false);
-
-  async function handleEmailAuth(mode: "login" | "signup") {
-    setError("");
-    setLoading(true);
-    try {
-      if (mode === "login") {
-        await signInWithEmail(email, password);
-      } else {
-        await signUpWithEmail(email, password);
-        setSignupSuccess(true);
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Authentication failed");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const { signInWithGitHub } = useAuth();
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -62,137 +35,25 @@ export default function Login() {
           </p>
         </a>
 
-        {signupSuccess ? (
-          <Card>
-            <CardContent className="py-10 text-center space-y-4">
-              <div className="flex justify-center">
-                <div className="h-14 w-14 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                  <Mail className="h-7 w-7 text-green-600" />
-                </div>
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold">Check your email</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  We sent a confirmation link to <strong>{email}</strong>. Click
-                  the link to verify your account and get started.
-                </p>
-              </div>
-              <div className="pt-2 space-y-2">
-                <p className="text-xs text-muted-foreground">
-                  Didn&apos;t receive it? Check your spam folder or try again.
-                </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSignupSuccess(false);
-                    setError("");
-                  }}
-                >
-                  Back to login
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card>
-            <CardHeader className="text-center">
-              <CardTitle>Get started</CardTitle>
-              <CardDescription>
-                Sign in to start migrating your projects
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Button
-                onClick={signInWithGitHub}
-                variant="outline"
-                className="w-full"
-                size="lg"
-              >
-                <GithubIcon className="mr-2 h-5 w-5" />
-                Continue with GitHub
-              </Button>
-
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">or</span>
-                </div>
-              </div>
-
-              <Tabs defaultValue="login">
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="login">Login</TabsTrigger>
-                  <TabsTrigger value="signup">Sign up</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="login" className="space-y-3 mt-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="login-email">Email</Label>
-                    <Input
-                      id="login-email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="you@example.com"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="login-password">Password</Label>
-                    <Input
-                      id="login-password"
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                    />
-                  </div>
-                  <Button
-                    onClick={() => handleEmailAuth("login")}
-                    className="w-full"
-                    disabled={loading}
-                  >
-                    {loading ? "Signing in..." : "Sign in"}
-                  </Button>
-                </TabsContent>
-
-                <TabsContent value="signup" className="space-y-3 mt-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="signup-email">Email</Label>
-                    <Input
-                      id="signup-email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="you@example.com"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="signup-password">Password</Label>
-                    <Input
-                      id="signup-password"
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                    />
-                  </div>
-                  <Button
-                    onClick={() => handleEmailAuth("signup")}
-                    className="w-full"
-                    disabled={loading}
-                  >
-                    {loading ? "Creating account..." : "Create account"}
-                  </Button>
-                </TabsContent>
-              </Tabs>
-
-              {error && (
-                <p className="text-sm text-destructive text-center">{error}</p>
-              )}
-            </CardContent>
-          </Card>
-        )}
+        <Card>
+          <CardHeader className="text-center">
+            <CardTitle>Get started</CardTitle>
+            <CardDescription>
+              Sign in with GitHub to start migrating your projects
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              onClick={signInWithGitHub}
+              variant="outline"
+              className="w-full"
+              size="lg"
+            >
+              <GithubIcon className="mr-2 h-5 w-5" />
+              Continue with GitHub
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
