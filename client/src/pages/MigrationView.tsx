@@ -204,10 +204,16 @@ export default function MigrationView() {
   async function handlePayOverage() {
     setPaying(true);
     try {
-      const { checkout_url } = await api.post<{ checkout_url: string }>(
+      const res = await api.post<{ checkout_url?: string; paid?: boolean }>(
         `/migrations/${migrationId}/pay-overage`,
       );
-      window.location.href = checkout_url;
+      if (res.paid) {
+        toast.success("Migration resuming!");
+        setPollKey((k) => k + 1);
+        setPaying(false);
+      } else if (res.checkout_url) {
+        window.location.href = res.checkout_url;
+      }
     } catch {
       setPaying(false);
     }
@@ -216,14 +222,20 @@ export default function MigrationView() {
   async function handlePayAndStart() {
     setPaying(true);
     try {
-      const { checkout_url } = await api.post<{ checkout_url: string }>(
+      const res = await api.post<{ checkout_url?: string; paid?: boolean }>(
         `/migrations/${migrationId}/confirm`,
         {
           addon_data_migration: addonDataMigration,
           addon_code_review: addonCodeReview,
         },
       );
-      window.location.href = checkout_url;
+      if (res.paid) {
+        toast.success("Migration started!");
+        setPollKey((k) => k + 1);
+        setPaying(false);
+      } else if (res.checkout_url) {
+        window.location.href = res.checkout_url;
+      }
     } catch {
       setPaying(false);
     }
