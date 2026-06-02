@@ -269,6 +269,7 @@ export default function MigrationView() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setActionError(msg);
+      fetchMigration();
     } finally {
       setDeploying(false);
     }

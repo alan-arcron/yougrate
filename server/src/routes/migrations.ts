@@ -379,8 +379,15 @@ router.post(
         repoId,
       );
 
-      runBuildFixLoop(migration.id, deployment.id).catch((err) => {
+      runBuildFixLoop(migration.id, deployment.id).catch(async (err) => {
         console.error("[deploy] Build fix loop error:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        await db("migrations")
+          .where({ id: migration.id })
+          .update({ status: "failed", error_message: `Deploy failed: ${msg}` });
+        await db("projects")
+          .where({ id: project.id })
+          .update({ status: "failed" });
       });
 
       res.json({

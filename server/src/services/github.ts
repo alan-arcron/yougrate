@@ -75,8 +75,10 @@ export async function pushToRepo(
 
   await fs.rm(path.join(localPath, ".git"), { recursive: true, force: true });
   await git.init();
-  await git.addConfig("user.email", "yougrate@arcron.systems");
+  await git.addConfig("user.email", "noreply@github.com");
   await git.addConfig("user.name", "Yougrate");
+  await git.addConfig("http.version", "HTTP/1.1");
+  await git.addConfig("http.postBuffer", "524288000");
   await git.checkout(["-b", branch]);
   await git.addRemote("origin", remoteUrl);
   await git.add(".");
