@@ -613,7 +613,7 @@ export async function runMigration(migrationId: string): Promise<void> {
 
 export async function pushMigratedCode(
   migrationId: string,
-  outputType: "new_repo" | "branch",
+  outputType: "new" | "fork" | "branch",
   repoName?: string,
 ): Promise<{ repoUrl: string; branch: string }> {
   const migration = await db("migrations").where({ id: migrationId }).first();
@@ -652,7 +652,7 @@ export async function pushMigratedCode(
   let repoUrl: string;
   let branch: string;
 
-  if (outputType === "new_repo") {
+  if (outputType === "new") {
     const name = repoName || `${project.name}-supabase`;
     const newRepo = await github.createNewRepo(user.github_access_token, name);
     repoUrl = newRepo.html_url;

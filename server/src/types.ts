@@ -92,7 +92,7 @@ export interface Migration {
   actual_input_tokens: number;
   actual_output_tokens: number;
   actual_cost_cents: number;
-  output_type: "new_repo" | "branch" | null;
+  output_type: "new" | "fork" | "branch" | null;
   output_repo_url: string | null;
   output_branch: string | null;
   error_message: string | null;
