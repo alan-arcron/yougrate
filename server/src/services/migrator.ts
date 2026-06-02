@@ -536,6 +536,14 @@ export async function runMigration(migrationId: string): Promise<void> {
         "warn",
       );
     } else {
+      // Generate scaffold files that migrated code may import but don't exist in the source
+      const s3PrefixScaffold = s3.getWorkspacePrefix(project.id, migrationId);
+      const scaffoldFiles = await generateScaffoldFiles(migrationId, s3PrefixScaffold);
+      for (const [filePath, content] of scaffoldFiles) {
+        await s3.uploadFile(`${s3PrefixScaffold}/migrated/${filePath}`, content);
+        await log(migrationId, `Generated scaffold: ${filePath}`);
+      }
+
       // Run data migration add-on if selected
       if (migration.addon_data_migration) {
         await log(migrationId, "Generating Supabase SQL schema from source code...");
@@ -611,6 +619,66 @@ export async function runMigration(migrationId: string): Promise<void> {
   }
 }
 
+const SCAFFOLD_TEMPLATES: Record<string, string> = {
+  "src/lib/supabase.ts": `import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+`,
+  "src/integrations/supabase/client.ts": `import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+`,
+  "src/supabaseClient.ts": `import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+`,
+};
+
+async function generateScaffoldFiles(
+  migrationId: string,
+  s3Prefix: string,
+): Promise<Map<string, string>> {
+  const completedFiles = await db("migration_files")
+    .where({ migration_id: migrationId, status: "completed" })
+    .select("file_path");
+
+  const migratedPaths = new Set(completedFiles.map((f) => f.file_path));
+  const needed = new Map<string, string>();
+
+  for (const f of completedFiles) {
+    let content: string;
+    try {
+      content = await s3.downloadFile(`${s3Prefix}/migrated/${f.file_path}`);
+    } catch { continue; }
+
+    for (const [scaffoldPath, template] of Object.entries(SCAFFOLD_TEMPLATES)) {
+      if (needed.has(scaffoldPath) || migratedPaths.has(scaffoldPath)) continue;
+
+      const importName = scaffoldPath.replace(/\.ts$/, "");
+      const aliasPattern = importName.replace(/^src\//, "@/");
+      const patterns = [importName, aliasPattern];
+
+      for (const p of patterns) {
+        if (content.includes(`from "${p}"`) || content.includes(`from '${p}'`)) {
+          needed.set(scaffoldPath, template);
+          break;
+        }
+      }
+    }
+  }
+
+  return needed;
+}
+
 export async function pushMigratedCode(
   migrationId: string,
   outputType: "new" | "fork" | "branch",
@@ -647,6 +715,16 @@ export async function pushMigratedCode(
     const filePath = path.join(localPath, file.file_path);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, "utf-8");
+  }
+
+  // Apply scaffold files (supabase client, etc.)
+  for (const scaffoldPath of Object.keys(SCAFFOLD_TEMPLATES)) {
+    try {
+      const content = await s3.downloadFile(`${s3Prefix}/migrated/${scaffoldPath}`);
+      const fullPath = path.join(localPath, scaffoldPath);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(fullPath, content, "utf-8");
+    } catch { /* scaffold not generated for this migration */ }
   }
 
   let repoUrl: string;
