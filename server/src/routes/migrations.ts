@@ -679,4 +679,41 @@ router.post(
   },
 );
 
+router.post(
+  "/:id/request-review",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const migration = await db("migrations")
+      .where({ id: req.params.id })
+      .first();
+
+    if (!migration || !["completed", "failed", "reviewed"].includes(migration.status)) {
+      res.status(400).json({ error: "Migration must be completed or failed to request a review" });
+      return;
+    }
+
+    const project = await db("projects")
+      .where({ id: migration.project_id, user_id: req.userId })
+      .first();
+    if (!project) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+
+    if (isAdmin(req.userEmail)) {
+      await db("migrations")
+        .where({ id: migration.id })
+        .update({ status: "pending_review", addon_code_review: true });
+      res.json({ status: "pending_review" });
+      return;
+    }
+
+    await db("migrations")
+      .where({ id: migration.id })
+      .update({ status: "pending_review", addon_code_review: true });
+
+    res.json({ status: "pending_review" });
+  },
+);
+
 export default router;

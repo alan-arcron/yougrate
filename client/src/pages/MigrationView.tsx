@@ -63,6 +63,7 @@ interface MigrationDetail {
   output_repo_url: string | null;
   output_branch: string | null;
   error_message: string | null;
+  addon_code_review: boolean;
   migration_log: { timestamp: string; message: string; level: string }[];
   files: MigrationFile[];
   started_at: string | null;
@@ -794,6 +795,40 @@ export default function MigrationView() {
                 </p>
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Request code review */}
+      {(isCompleted || isFailed) && !migration.addon_code_review && (
+        <Card className="mb-6">
+          <CardContent className="flex items-center justify-between py-4">
+            <div className="flex items-center gap-3">
+              <UserCheck className="h-5 w-5 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">Request Code Review</p>
+                <p className="text-xs text-muted-foreground">
+                  Have a senior engineer review your migrated code
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                try {
+                  await api.post(`/migrations/${migrationId}/request-review`);
+                  toast.success("Code review requested!");
+                  setPollKey((k) => k + 1);
+                } catch (err: unknown) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  toast.error(msg);
+                }
+              }}
+            >
+              <UserCheck className="mr-2 h-3.5 w-3.5" />
+              Request Review
+            </Button>
           </CardContent>
         </Card>
       )}
