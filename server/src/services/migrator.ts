@@ -13,6 +13,9 @@ import {
 import * as s3 from "./s3";
 import * as github from "./github";
 import * as vercel from "./vercel";
+import { decryptSecret } from "../utils/crypto";
+import { redactSecrets } from "../utils/redact";
+import { safeJoin } from "../utils/paths";
 import fs from "fs/promises";
 import path from "path";
 import type { Migration, MigrationLogEntry, SupabaseService } from "../types";
@@ -28,7 +31,7 @@ function friendlyError(err: unknown): string {
   if (raw.includes("authentication") || raw.includes("401")) {
     return "AI service authentication failed. Please contact support.";
   }
-  return raw;
+  return redactSecrets(raw);
 }
 
 function log(
@@ -138,6 +141,95 @@ function isCodeFile(filePath: string): boolean {
   return true;
 }
 
+/**
+ * Files likely to contain secrets. We never send these to the LLM. They still
+ * carry over to the output repo unchanged via the clone, so nothing breaks —
+ * we just don't transform them or disclose their contents to a third party.
+ */
+function isSecretFile(filePath: string): boolean {
+  const basename = path.basename(filePath).toLowerCase();
+  const ext = path.extname(filePath).toLowerCase();
+  // Templates/examples are safe to keep — they contain no real secrets.
+  if (/\.(example|sample|template)$/.test(basename)) return false;
+  if (basename === ".env" || basename.startsWith(".env.")) return true;
+  if ([".pem", ".key", ".p12", ".pfx", ".keystore"].includes(ext)) return true;
+  if (
+    basename === "id_rsa" ||
+    basename === "id_ed25519" ||
+    basename === ".npmrc" ||
+    basename === ".netrc" ||
+    basename === "credentials" ||
+    basename.endsWith(".secret") ||
+    basename.includes("secrets")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+const SECRET_GITIGNORE_ENTRIES = [
+  ".env",
+  ".env.*",
+  "!.env.example",
+  "!.env.sample",
+  "!.env.template",
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "*.pfx",
+  "*.keystore",
+  "id_rsa",
+  "id_ed25519",
+  ".npmrc",
+  ".netrc",
+];
+
+/**
+ * Remove committed secret files from a cloned working tree before pushing, and
+ * make sure .gitignore keeps them out going forward. Returns the removed paths.
+ */
+async function stripSecretFiles(
+  localPath: string,
+  migrationId: string,
+): Promise<string[]> {
+  const allFiles = await github.getRepoFiles(localPath);
+  const removed: string[] = [];
+  for (const rel of allFiles) {
+    if (!isSecretFile(rel)) continue;
+    const full = safeJoin(localPath, rel);
+    if (!full) continue;
+    try {
+      await fs.rm(full, { force: true });
+      removed.push(rel);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (removed.length > 0) {
+    const gitignorePath = path.join(localPath, ".gitignore");
+    let existing = "";
+    try {
+      existing = await fs.readFile(gitignorePath, "utf-8");
+    } catch {
+      /* no .gitignore yet */
+    }
+    const lines = new Set(existing.split(/\r?\n/).map((l) => l.trim()));
+    const missing = SECRET_GITIGNORE_ENTRIES.filter((e) => !lines.has(e));
+    if (missing.length > 0) {
+      const block = `${existing.endsWith("\n") || existing === "" ? "" : "\n"}\n# Added by Yougrate — keep secrets out of version control\n${missing.join("\n")}\n`;
+      await fs.writeFile(gitignorePath, existing + block, "utf-8");
+    }
+    await log(
+      migrationId,
+      `Excluded ${removed.length} committed secret file(s) from the pushed repo: ${removed.join(", ")}`,
+      "warn",
+    );
+  }
+
+  return removed;
+}
+
 export async function runAnalysis(
   migrationId: string,
   modelOverride?: string,
@@ -173,7 +265,7 @@ export async function runAnalysis(
         `Workspace already exists in S3 (${existingWorkspace.length} files), skipping clone/upload`,
       );
       localPath = await github.cloneRepo(
-        user.github_access_token,
+        decryptSecret(user.github_access_token),
         project.github_repo_full_name,
         project.default_branch,
       );
@@ -181,7 +273,7 @@ export async function runAnalysis(
     } else {
       await log(migrationId, `Cloning ${project.github_repo_full_name}...`);
       localPath = await github.cloneRepo(
-        user.github_access_token,
+        decryptSecret(user.github_access_token),
         project.github_repo_full_name,
         project.default_branch,
       );
@@ -193,11 +285,24 @@ export async function runAnalysis(
       await s3.uploadDirectory(localPath, s3Prefix);
     }
 
-    const codeFiles = allFiles.filter(isCodeFile);
+    const secretFiles = allFiles.filter(isSecretFile);
+    const codeFiles = allFiles.filter((f) => isCodeFile(f) && !isSecretFile(f));
     await log(
       migrationId,
       `Found ${allFiles.length} files (${codeFiles.length} code files)`,
     );
+    if (secretFiles.length > 0) {
+      await log(
+        migrationId,
+        `Skipping ${secretFiles.length} secret file(s) from AI analysis (kept as-is): ${secretFiles.join(", ")}`,
+        "warn",
+      );
+    }
+    // Record committed secret files so we can warn the user (they'll be stripped
+    // from the pushed output repo).
+    await db("migrations")
+      .where({ id: migrationId })
+      .update({ committed_secrets: JSON.stringify(secretFiles) });
 
     // Read code files for platform detection and analysis
     const fileContents = new Map<string, string>();
@@ -432,6 +537,15 @@ export async function runMigration(migrationId: string): Promise<void> {
     const s3Prefix = s3.getWorkspacePrefix(project.id, migrationId);
 
     for (const file of pendingFiles) {
+      // Never send secret files to the LLM, even if an older run queued them.
+      if (isSecretFile(file.file_path)) {
+        await db("migration_files")
+          .where({ id: file.id })
+          .update({ status: "skipped" });
+        await log(migrationId, `Skipped secret file: ${file.file_path}`, "warn");
+        continue;
+      }
+
       await log(migrationId, `Migrating: ${file.file_path}`);
       await updateMigration(migrationId, { current_file: file.file_path });
       await db("migration_files")
@@ -701,7 +815,7 @@ export async function pushMigratedCode(
 
   // Clone original repo to temp dir
   const localPath = await github.cloneRepo(
-    user.github_access_token,
+    decryptSecret(user.github_access_token),
     project.github_repo_full_name,
     project.default_branch,
   );
@@ -709,10 +823,14 @@ export async function pushMigratedCode(
   // Download migrated files from S3 and apply
   const s3Prefix = s3.getWorkspacePrefix(project.id, migrationId);
   for (const file of migratedFiles) {
+    const filePath = safeJoin(localPath, file.file_path);
+    if (!filePath) {
+      await log(migrationId, `Skipped unsafe file path: ${file.file_path}`, "warn");
+      continue;
+    }
     const content = await s3.downloadFile(
       `${s3Prefix}/migrated/${file.file_path}`,
     );
-    const filePath = path.join(localPath, file.file_path);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content, "utf-8");
   }
@@ -727,16 +845,19 @@ export async function pushMigratedCode(
     } catch { /* scaffold not generated for this migration */ }
   }
 
+  // Never propagate committed secrets to the output repo.
+  await stripSecretFiles(localPath, migrationId);
+
   let repoUrl: string;
   let branch: string;
 
   if (outputType === "new") {
     const name = repoName || `${project.name}-supabase`;
-    const newRepo = await github.createNewRepo(user.github_access_token, name);
+    const newRepo = await github.createNewRepo(decryptSecret(user.github_access_token), name);
     repoUrl = newRepo.html_url;
     branch = "main";
     await github.pushToRepo(
-      user.github_access_token,
+      decryptSecret(user.github_access_token),
       localPath,
       newRepo.full_name,
       branch,
@@ -746,7 +867,7 @@ export async function pushMigratedCode(
     branch = `yougrate/migration`;
     repoUrl = project.github_repo_url;
     await github.pushToRepo(
-      user.github_access_token,
+      decryptSecret(user.github_access_token),
       localPath,
       project.github_repo_full_name,
       branch,
@@ -799,7 +920,7 @@ export async function runBuildFixLoop(
       );
 
       const result = await vercel.waitForDeployment(
-        user.vercel_access_token,
+        decryptSecret(user.vercel_access_token),
         currentDeploymentId,
       );
 
@@ -831,7 +952,7 @@ export async function runBuildFixLoop(
         );
 
         const buildLog = await vercel.getDeploymentEvents(
-          user.vercel_access_token,
+          decryptSecret(user.vercel_access_token),
           currentDeploymentId,
         );
 
@@ -967,19 +1088,23 @@ export async function runBuildFixLoop(
           "",
         );
         const localPath = await github.cloneRepo(
-          user.github_access_token,
+          decryptSecret(user.github_access_token),
           repoFullName,
           migration.output_branch || "main",
         );
 
         for (const [filePath, content] of fixResult.fixes) {
-          const fullPath = path.join(localPath, filePath);
+          const fullPath = safeJoin(localPath, filePath);
+          if (!fullPath) {
+            await log(migrationId, `Skipped unsafe fix path: ${filePath}`, "warn");
+            continue;
+          }
           await fs.mkdir(path.dirname(fullPath), { recursive: true });
           await fs.writeFile(fullPath, content, "utf-8");
         }
 
         await github.pushToRepo(
-          user.github_access_token,
+          decryptSecret(user.github_access_token),
           localPath,
           repoFullName,
           migration.output_branch || "main",
@@ -993,7 +1118,7 @@ export async function runBuildFixLoop(
 
         await new Promise((r) => setTimeout(r, 15_000));
         const latest = await vercel.getLatestDeployment(
-          user.vercel_access_token,
+          decryptSecret(user.vercel_access_token),
           project.name,
         );
         if (latest) {
@@ -1010,7 +1135,7 @@ export async function runBuildFixLoop(
           );
           await new Promise((r) => setTimeout(r, 15_000));
           const retry = await vercel.getLatestDeployment(
-            user.vercel_access_token,
+            decryptSecret(user.vercel_access_token),
             project.name,
           );
           if (retry) {

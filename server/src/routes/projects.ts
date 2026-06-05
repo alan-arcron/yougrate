@@ -5,6 +5,7 @@ import type { AuthRequest } from "../middleware/auth";
 import { requireAuth } from "../middleware/auth";
 import { validateBody } from "../middleware/validate";
 import * as githubService from "../services/github";
+import { decryptSecret } from "../utils/crypto";
 
 const createProjectSchema = z.object({
   name: z.string().max(200).optional(),
@@ -28,15 +29,51 @@ router.get("/", requireAuth, async (req: AuthRequest, res: Response) => {
 });
 
 router.post("/", requireAuth, validateBody(createProjectSchema), async (req: AuthRequest, res: Response) => {
-  const { name, github_repo_url, github_repo_full_name, default_branch } = req.body;
+  const { name, github_repo_full_name, default_branch } = req.body;
 
+  const user = await db("users").where({ id: req.userId }).first();
+  if (!user?.github_access_token) {
+    res.status(400).json({ error: "GitHub not connected" });
+    return;
+  }
+
+  // Verify the requesting user's own token can actually access this repo.
+  // This blocks pointing a project at an arbitrary repo the user can't see.
+  let repoInfo;
+  try {
+    repoInfo = await githubService.getRepoInfo(
+      decryptSecret(user.github_access_token),
+      github_repo_full_name,
+    );
+  } catch (err: unknown) {
+    if ((err as { status?: number }).status === 401) {
+      res.status(401).json({
+        error: "github_token_expired",
+        message: "Your GitHub token has expired. Please reconnect GitHub in Settings.",
+      });
+      return;
+    }
+    throw err;
+  }
+
+  if (!repoInfo) {
+    res.status(403).json({
+      error: "repo_not_accessible",
+      message:
+        "That repository was not found or your GitHub account does not have access to it.",
+    });
+    return;
+  }
+
+  // Always derive the canonical URL/branch from GitHub, ignoring client-supplied
+  // values that could be inconsistent with the verified repo.
   const [project] = await db("projects")
     .insert({
       user_id: req.userId,
-      name: name || github_repo_full_name.split("/")[1],
-      github_repo_url: github_repo_url || `https://github.com/${github_repo_full_name}`,
-      github_repo_full_name,
-      default_branch: default_branch || "main",
+      name: name || repoInfo.full_name.split("/")[1],
+      github_repo_url: `https://github.com/${repoInfo.full_name}`,
+      github_repo_full_name: repoInfo.full_name,
+      default_branch: default_branch || repoInfo.default_branch || "main",
     })
     .returning("*");
 
@@ -51,7 +88,7 @@ router.get("/github/repos", requireAuth, async (req: AuthRequest, res: Response)
   }
 
   try {
-    const repos = await githubService.listRepos(user.github_access_token);
+    const repos = await githubService.listRepos(decryptSecret(user.github_access_token));
     res.json(repos);
   } catch (err: unknown) {
     const status = (err as { status?: number }).status;

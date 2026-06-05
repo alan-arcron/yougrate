@@ -96,6 +96,7 @@ export interface Migration {
   output_repo_url: string | null;
   output_branch: string | null;
   error_message: string | null;
+  committed_secrets: string[];
   migration_log: MigrationLogEntry[];
   addon_data_migration: boolean;
   addon_code_review: boolean;

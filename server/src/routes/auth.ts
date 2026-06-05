@@ -4,6 +4,7 @@ import { db } from "../db";
 import type { AuthRequest } from "../middleware/auth";
 import { requireAuth, isAdmin } from "../middleware/auth";
 import { validateBody } from "../middleware/validate";
+import { encryptSecret } from "../utils/crypto";
 
 const syncSchema = z.object({
   name: z.string().max(200).nullish(),
@@ -37,7 +38,7 @@ router.post("/sync", requireAuth, validateBody(syncSchema), async (req: AuthRequ
       updated_at: new Date().toISOString(),
     };
     if (github_access_token && !existing.github_access_token) {
-      updates.github_access_token = github_access_token;
+      updates.github_access_token = encryptSecret(github_access_token)!;
       updates.github_username = github_username || existing.github_username;
     }
     await db("users").where({ id: req.userId }).update(updates);
@@ -47,7 +48,7 @@ router.post("/sync", requireAuth, validateBody(syncSchema), async (req: AuthRequ
       email,
       name,
       avatar_url,
-      github_access_token: github_access_token || null,
+      github_access_token: encryptSecret(github_access_token) || null,
       github_username: github_username || null,
     });
   }
@@ -84,7 +85,7 @@ router.post("/github-token", requireAuth, validateBody(githubTokenSchema), async
   const { access_token, username } = req.body;
 
   await db("users").where({ id: req.userId }).update({
-    github_access_token: access_token,
+    github_access_token: encryptSecret(access_token),
     github_username: username,
     updated_at: new Date().toISOString(),
   });
@@ -96,7 +97,7 @@ router.post("/vercel-token", requireAuth, validateBody(vercelTokenSchema), async
   const { access_token } = req.body;
 
   await db("users").where({ id: req.userId }).update({
-    vercel_access_token: access_token,
+    vercel_access_token: encryptSecret(access_token),
     updated_at: new Date().toISOString(),
   });
 

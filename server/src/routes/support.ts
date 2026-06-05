@@ -5,7 +5,7 @@ import { db } from "../db";
 import type { AuthRequest } from "../middleware/auth";
 import { requireAuth, optionalAuth } from "../middleware/auth";
 import { validateBody } from "../middleware/validate";
-import { getPresignedUploadUrl } from "../services/s3";
+import { getPresignedUploadUrl, getPresignedDownloadUrl } from "../services/s3";
 import { sendSupportNotification, sendTicketConfirmation } from "../services/email";
 import crypto from "crypto";
 
@@ -19,7 +19,13 @@ const createTicketSchema = z.object({
   subject: z.string().min(1).max(500),
   description: z.string().min(1).max(10000),
   email: z.string().email().max(320).optional(),
-  image_urls: z.array(z.string().url().max(2000)).max(10).optional(),
+  // S3 object keys (not URLs) produced by /upload-url. Validated to belong to
+  // the requesting user before being stored.
+  image_keys: z.array(z.string().min(1).max(512)).max(10).optional(),
+}).strip();
+
+const imageUrlSchema = z.object({
+  key: z.string().min(1).max(512),
 }).strip();
 
 const router = Router();
@@ -48,15 +54,28 @@ router.post("/upload-url", requireAuth, validateBody(uploadUrlSchema), async (re
   }
 
   const id = crypto.randomUUID();
-  const ext = filename.split(".").pop() || "png";
+  // Only derive a safe extension; never use the raw filename in the key.
+  const rawExt = (filename.split(".").pop() || "png").toLowerCase();
+  const ext = /^[a-z0-9]{1,5}$/.test(rawExt) ? rawExt : "png";
   const key = `support/${req.userId}/${id}.${ext}`;
 
-  const { uploadUrl, publicUrl } = await getPresignedUploadUrl(key, contentType);
-  res.json({ uploadUrl, imageUrl: publicUrl });
+  const { uploadUrl } = await getPresignedUploadUrl(key, contentType);
+  res.json({ uploadUrl, key });
+});
+
+// Owner-only: mint a short-lived signed URL to view one of their own uploads.
+router.post("/image-url", requireAuth, validateBody(imageUrlSchema), async (req: AuthRequest, res: Response) => {
+  const { key } = req.body;
+  if (!key.startsWith(`support/${req.userId}/`)) {
+    res.status(403).json({ error: "Not allowed" });
+    return;
+  }
+  const url = await getPresignedDownloadUrl(key);
+  res.json({ url });
 });
 
 router.post("/tickets", ticketLimiter, optionalAuth, validateBody(createTicketSchema), async (req: AuthRequest, res: Response) => {
-  const { type, subject, description, email, image_urls } = req.body;
+  const { type, subject, description, email, image_keys } = req.body;
 
   if (type === "bug" && !req.userId) {
     res.status(401).json({ error: "Bug reports require authentication. Please log in." });
@@ -69,6 +88,20 @@ router.post("/tickets", ticketLimiter, optionalAuth, validateBody(createTicketSc
     return;
   }
 
+  // Only accept attachment keys that the user actually owns (uploaded under
+  // their own prefix). Unauthenticated submissions cannot attach images.
+  const keys: string[] = Array.isArray(image_keys) ? image_keys : [];
+  if (keys.length > 0 && !req.userId) {
+    res.status(400).json({ error: "Attachments require authentication" });
+    return;
+  }
+  const prefix = `support/${req.userId}/`;
+  const invalidKey = keys.find((k) => !k.startsWith(prefix));
+  if (invalidKey) {
+    res.status(400).json({ error: "Invalid attachment reference" });
+    return;
+  }
+
   const [ticket] = await db("support_tickets")
     .insert({
       user_id: req.userId || null,
@@ -76,7 +109,7 @@ router.post("/tickets", ticketLimiter, optionalAuth, validateBody(createTicketSc
       type,
       subject,
       description,
-      image_urls: JSON.stringify(image_urls || []),
+      image_urls: JSON.stringify(keys),
     })
     .returning("*");
 

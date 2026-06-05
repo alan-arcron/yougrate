@@ -89,8 +89,11 @@ export async function sendSupportNotification(ticket: TicketInfo): Promise<void>
   const adminEmail = getAdminEmail();
   if (!adminEmail) return;
 
-  const images = (ticket.image_urls || []).length > 0
-    ? (ticket.image_urls || []).map((url) => `<p><a href="${url}" style="color: #3b82f6; text-decoration: underline;">View attachment</a></p>`).join("")
+  // Attachments are stored as private S3 keys and are only viewable via the
+  // admin page (which mints short-lived signed URLs). Never embed raw links.
+  const attachmentCount = (ticket.image_urls || []).length;
+  const images = attachmentCount > 0
+    ? `<p><strong>${attachmentCount}</strong> attachment(s) — view them on the admin page.</p>`
     : "";
 
   const html = htmlLayout(`

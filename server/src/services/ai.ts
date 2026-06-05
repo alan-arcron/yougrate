@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ANTHROPIC_PRICING } from "../types";
 import type { DetectedPlatform, SupabaseService } from "../types";
+import { isSafeRelativePath } from "../utils/paths";
 
 let client: Anthropic | null = null;
 
@@ -31,13 +32,21 @@ export interface AnalysisContext {
   modelOverride?: string;
 }
 
+/** Only allow models we have pricing for; ignore arbitrary client-supplied strings. */
+export function resolveModel(override?: string): ModelId {
+  if (override && override in ANTHROPIC_PRICING) {
+    return override as ModelId;
+  }
+  return MODEL;
+}
+
 export async function analyzeFile(
   filePath: string,
   content: string,
   ctx: AnalysisContext,
 ): Promise<AIResponse & { needsMigration: boolean; reason: string }> {
   const anthropic = getClient();
-  const model = ctx.modelOverride || MODEL;
+  const model = resolveModel(ctx.modelOverride);
 
   const response = await anthropic.messages.create({
     model,
@@ -191,8 +200,19 @@ export async function fixBuildErrors(
 ): Promise<BuildFixResult> {
   const anthropic = getClient();
 
+  // Bound per-file and total size sent to the model to prevent unbounded
+  // token usage from large/malicious files.
+  const MAX_PER_FILE = 24_000;
+  const MAX_TOTAL = 120_000;
+  let budget = MAX_TOTAL;
   const fileList = Array.from(files.entries())
-    .map(([path, content]) => `### ${path}\n\`\`\`\n${content}\n\`\`\``)
+    .map(([path, content]) => {
+      if (budget <= 0) return "";
+      const slice = content.slice(0, Math.min(MAX_PER_FILE, budget));
+      budget -= slice.length;
+      return `### ${path}\n\`\`\`\n${slice}\n\`\`\``;
+    })
+    .filter(Boolean)
     .join("\n\n");
 
   const response = await anthropic.messages.create({
@@ -247,6 +267,11 @@ Only include files that need changes.`,
   const fixes = new Map<string, string>();
   if (parsed.fixes) {
     for (const [filePath, rawContent] of Object.entries(parsed.fixes)) {
+      // Reject model-chosen paths that try to escape the workspace.
+      if (!isSafeRelativePath(filePath)) {
+        console.warn(`[ai] Rejected unsafe fix path from model: ${filePath}`);
+        continue;
+      }
       let content = stripMarkdownFences(rawContent);
       // Reject responses that are clearly commentary, not code
       if (
@@ -322,13 +347,22 @@ CRITICAL: Output raw SQL only. No markdown fences. No explanations before or aft
   };
 }
 
+// Fixed input overhead per migrateFile call: system prompt + the migration
+// rules/instructions block that is prepended to every file (not part of the
+// file content itself). Without this the estimate undercounts input tokens.
+const MIGRATE_PROMPT_OVERHEAD_TOKENS = 400;
+// Migrated files tend to grow (added Supabase client/boilerplate), so output
+// runs larger than the source file rather than ~1.2x.
+const OUTPUT_TO_INPUT_RATIO = 1.4;
+
 export function estimateTokens(content: string): {
   input: number;
   output: number;
 } {
   const charCount = content.length;
-  const estimatedInputTokens = Math.ceil(charCount / 3.5);
-  const estimatedOutputTokens = Math.ceil(estimatedInputTokens * 1.2);
+  const fileInputTokens = Math.ceil(charCount / 3.5);
+  const estimatedInputTokens = fileInputTokens + MIGRATE_PROMPT_OVERHEAD_TOKENS;
+  const estimatedOutputTokens = Math.ceil(fileInputTokens * OUTPUT_TO_INPUT_RATIO);
   return { input: estimatedInputTokens, output: estimatedOutputTokens };
 }
 

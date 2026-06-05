@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -63,6 +63,7 @@ interface MigrationDetail {
   output_repo_url: string | null;
   output_branch: string | null;
   error_message: string | null;
+  committed_secrets: string[];
   addon_code_review: boolean;
   migration_log: { timestamp: string; message: string; level: string }[];
   files: MigrationFile[];
@@ -338,6 +339,55 @@ export default function MigrationView() {
         </Badge>
       </div>
 
+      {/* Committed secrets warning */}
+      {(migration.committed_secrets || []).length > 0 && (
+        <div className="mb-6 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-amber-600 dark:text-amber-400">
+                Secret files detected in your repository
+              </p>
+              <p className="text-muted-foreground mt-1 leading-relaxed">
+                We found {migration.committed_secrets.length} file
+                {migration.committed_secrets.length === 1 ? "" : "s"} that
+                appear to contain credentials. These are{" "}
+                <strong>excluded from AI analysis</strong> and will be{" "}
+                <strong>stripped from the migrated repository</strong> (and added
+                to <code>.gitignore</code>) so secrets aren&rsquo;t republished.
+                Because they were committed to your source repo, you should
+                consider these secrets exposed and{" "}
+                <strong>rotate them</strong>.
+              </p>
+              <p className="text-muted-foreground mt-2 font-mono text-xs break-all">
+                {migration.committed_secrets.join(", ")}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Review-before-production notice */}
+      {(isCompleted || isReviewed || deployed) && (
+        <div className="mb-6 rounded-lg border border-blue-500/40 bg-blue-500/10 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-blue-500 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium text-blue-600 dark:text-blue-400">
+                Review AI-generated code before production use
+              </p>
+              <p className="text-muted-foreground mt-1 leading-relaxed">
+                This code was rewritten by an AI model and is not guaranteed to
+                be correct or secure. Review the changes, run your test suite,
+                and verify auth, data access, and environment variables before
+                relying on it in production. For high-trust workloads, have a
+                human review the diff.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Analysis results / cost estimate */}
       {(isEstimated || migration.detected_platform) && (
         <Card className="mb-6">
@@ -602,6 +652,27 @@ export default function MigrationView() {
                         >
                           yougrate@arcron.systems
                         </a>
+                        .
+                      </p>
+                      <p className="text-xs text-muted-foreground leading-relaxed mt-2">
+                        Your source code is sent to Anthropic (Claude) for
+                        analysis and migration. By proceeding with payment you
+                        agree to our{" "}
+                        <Link
+                          to="/terms"
+                          target="_blank"
+                          className="text-primary hover:underline"
+                        >
+                          Terms of Service
+                        </Link>{" "}
+                        and{" "}
+                        <Link
+                          to="/privacy"
+                          target="_blank"
+                          className="text-primary hover:underline"
+                        >
+                          Privacy Policy
+                        </Link>
                         .
                       </p>
                     </div>

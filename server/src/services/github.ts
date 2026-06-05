@@ -3,6 +3,13 @@ import simpleGit from "simple-git";
 import path from "path";
 import fs from "fs/promises";
 import os from "os";
+import { redactSecrets } from "../utils/redact";
+
+/** Re-throw a git error with any embedded token/credentials stripped. */
+function scrubGitError(err: unknown): never {
+  const msg = err instanceof Error ? err.message : String(err);
+  throw new Error(redactSecrets(msg));
+}
 
 export function getOctokit(accessToken: string): InstanceType<typeof Octokit> {
   return new Octokit({
@@ -30,6 +37,43 @@ export async function listRepos(accessToken: string) {
   }));
 }
 
+export interface RepoInfo {
+  full_name: string;
+  default_branch: string;
+  private: boolean;
+  permissions: { pull: boolean; push: boolean; admin: boolean };
+}
+
+/**
+ * Fetch repo metadata using the caller's token. Returns null if the repo does
+ * not exist or the token cannot see it (404). `permissions` reflects what the
+ * token holder can do (push/admin), which we use to gate write operations.
+ */
+export async function getRepoInfo(
+  accessToken: string,
+  repoFullName: string,
+): Promise<RepoInfo | null> {
+  const [owner, repo] = repoFullName.split("/");
+  if (!owner || !repo) return null;
+  const octokit = getOctokit(accessToken);
+  try {
+    const { data } = await octokit.repos.get({ owner, repo });
+    return {
+      full_name: data.full_name,
+      default_branch: data.default_branch,
+      private: data.private,
+      permissions: {
+        pull: data.permissions?.pull ?? false,
+        push: data.permissions?.push ?? false,
+        admin: data.permissions?.admin ?? false,
+      },
+    };
+  } catch (err) {
+    if ((err as { status?: number }).status === 404) return null;
+    throw err;
+  }
+}
+
 export async function cloneRepo(
   accessToken: string,
   repoFullName: string,
@@ -40,7 +84,11 @@ export async function cloneRepo(
 
   const cloneUrl = `https://x-access-token:${accessToken}@github.com/${repoFullName}.git`;
   const git = simpleGit();
-  await git.clone(cloneUrl, tmpDir, ["--branch", branch, "--single-branch", "--depth", "1"]);
+  try {
+    await git.clone(cloneUrl, tmpDir, ["--branch", branch, "--single-branch", "--depth", "1"]);
+  } catch (err) {
+    scrubGitError(err);
+  }
 
   return tmpDir;
 }
@@ -73,17 +121,21 @@ export async function pushToRepo(
   const remoteUrl = `https://x-access-token:${accessToken}@github.com/${repoFullName}.git`;
   const git = simpleGit(localPath);
 
-  await fs.rm(path.join(localPath, ".git"), { recursive: true, force: true });
-  await git.init();
-  await git.addConfig("user.email", "noreply@github.com");
-  await git.addConfig("user.name", "Yougrate");
-  await git.addConfig("http.version", "HTTP/1.1");
-  await git.addConfig("http.postBuffer", "524288000");
-  await git.checkout(["-b", branch]);
-  await git.addRemote("origin", remoteUrl);
-  await git.add(".");
-  await git.commit(commitMessage);
-  await git.push("origin", branch, ["--set-upstream", "--force"]);
+  try {
+    await fs.rm(path.join(localPath, ".git"), { recursive: true, force: true });
+    await git.init();
+    await git.addConfig("user.email", "noreply@github.com");
+    await git.addConfig("user.name", "Yougrate");
+    await git.addConfig("http.version", "HTTP/1.1");
+    await git.addConfig("http.postBuffer", "524288000");
+    await git.checkout(["-b", branch]);
+    await git.addRemote("origin", remoteUrl);
+    await git.add(".");
+    await git.commit(commitMessage);
+    await git.push("origin", branch, ["--set-upstream", "--force"]);
+  } catch (err) {
+    scrubGitError(err);
+  }
 }
 
 export async function getRepoFiles(localPath: string): Promise<string[]> {

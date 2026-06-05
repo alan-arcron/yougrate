@@ -142,6 +142,8 @@ interface MigrationDetail {
   files_migrated: number;
   analysis_input_tokens: number;
   analysis_output_tokens: number;
+  analysis_cost_cents: number;
+  migration_cost_cents: number;
   estimated_input_tokens: number;
   estimated_output_tokens: number;
   estimated_cost_cents: number;
@@ -597,10 +599,16 @@ export default function Admin() {
                                               <p className="text-sm font-mono font-medium">
                                                 {((migrationDetail.analysis_input_tokens + migrationDetail.analysis_output_tokens) / 1000).toFixed(0)}k tok
                                               </p>
+                                              <p className="text-xs font-mono text-orange-600">
+                                                ${(migrationDetail.analysis_cost_cents / 100).toFixed(2)}
+                                              </p>
                                             </div>
                                             <div className="bg-muted/50 rounded p-2">
                                               <p className="text-xs text-muted-foreground">API Cost</p>
                                               <p className="text-sm font-mono font-medium text-orange-600">${(migrationDetail.raw_cost_cents / 100).toFixed(2)}</p>
+                                              <p className="text-xs font-mono text-muted-foreground">
+                                                analysis ${(migrationDetail.analysis_cost_cents / 100).toFixed(2)} + run ${(migrationDetail.migration_cost_cents / 100).toFixed(2)}
+                                              </p>
                                             </div>
                                             <div className="bg-muted/50 rounded p-2">
                                               <p className="text-xs text-muted-foreground">Billed</p>

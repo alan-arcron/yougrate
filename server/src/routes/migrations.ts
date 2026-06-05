@@ -19,6 +19,9 @@ import {
 import type { CheckoutAddons } from "../services/billing";
 import { calculateCost } from "../services/ai";
 import * as vercelService from "../services/vercel";
+import * as githubService from "../services/github";
+import { decryptSecret } from "../utils/crypto";
+import { redactSecrets } from "../utils/redact";
 
 const createMigrationSchema = z.object({
   project_id: z.string().uuid(),
@@ -46,6 +49,26 @@ async function checkAnalysisQuota(
   const used = user.free_analyses_used || 0;
   const limit = user.free_analyses_limit || 2;
   return { allowed: used < limit, used, limit };
+}
+
+/**
+ * Fetch a migration together with its owning project, verifying ownership in a
+ * single step. Returns null if the migration does not exist OR is not owned by
+ * the user — callers should respond with a uniform 404 to avoid leaking which
+ * migration IDs exist (no enumeration via status-before-ownership checks).
+ */
+async function getOwnedMigration(
+  migrationId: string | string[] | undefined,
+  userId: string | undefined,
+) {
+  if (!migrationId || Array.isArray(migrationId) || !userId) return null;
+  const migration = await db("migrations").where({ id: migrationId }).first();
+  if (!migration) return null;
+  const project = await db("projects")
+    .where({ id: migration.project_id, user_id: userId })
+    .first();
+  if (!project) return null;
+  return { migration, project };
 }
 
 router.post("/", requireAuth, validateBody(createMigrationSchema), async (req: AuthRequest, res: Response) => {
@@ -107,21 +130,12 @@ router.post("/", requireAuth, validateBody(createMigrationSchema), async (req: A
 });
 
 router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
-  const migration = await db("migrations").where({ id: req.params.id }).first();
-
-  if (!migration) {
+  const owned = await getOwnedMigration(req.params.id, req.userId);
+  if (!owned) {
     res.status(404).json({ error: "Not found" });
     return;
   }
-
-  const project = await db("projects")
-    .where({ id: migration.project_id, user_id: req.userId })
-    .first();
-
-  if (!project) {
-    res.status(404).json({ error: "Not found" });
-    return;
-  }
+  const { migration, project } = owned;
 
   const files = await db("migration_files")
     .where({ migration_id: migration.id })
@@ -150,19 +164,14 @@ router.post(
   requireAuth,
   validateBody(confirmSchema),
   async (req: AuthRequest, res: Response) => {
-    const migration = await db("migrations")
-      .where({ id: req.params.id })
-      .first();
-    if (!migration || migration.status !== "estimated") {
-      res.status(400).json({ error: "Migration must be in estimated status" });
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
       return;
     }
-
-    const project = await db("projects")
-      .where({ id: migration.project_id, user_id: req.userId })
-      .first();
-    if (!project) {
-      res.status(404).json({ error: "Not found" });
+    const { migration } = owned;
+    if (migration.status !== "estimated") {
+      res.status(400).json({ error: "Migration must be in estimated status" });
       return;
     }
 
@@ -212,19 +221,14 @@ router.post(
   "/:id/verify-payment",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
-    const migration = await db("migrations")
-      .where({ id: req.params.id })
-      .first();
-    if (!migration || migration.status !== "estimated") {
-      res.status(400).json({ error: "Migration not awaiting payment" });
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
       return;
     }
-
-    const project = await db("projects")
-      .where({ id: migration.project_id, user_id: req.userId })
-      .first();
-    if (!project) {
-      res.status(404).json({ error: "Not found" });
+    const { migration } = owned;
+    if (migration.status !== "estimated") {
+      res.status(400).json({ error: "Migration not awaiting payment" });
       return;
     }
 
@@ -269,20 +273,45 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     const { output_type, repo_name } = req.body;
 
-    const migration = await db("migrations")
-      .where({ id: req.params.id })
-      .first();
-    if (!migration || !["completed", "reviewed"].includes(migration.status)) {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration, project } = owned;
+    if (!["completed", "reviewed"].includes(migration.status)) {
       res.status(400).json({ error: "Migration must be completed or reviewed" });
       return;
     }
 
-    const project = await db("projects")
-      .where({ id: migration.project_id, user_id: req.userId })
-      .first();
-    if (!project) {
-      res.status(404).json({ error: "Not found" });
-      return;
+    // Pushing to the ORIGINAL repo (branch/fork modes) requires write access to it.
+    // "new" creates a fresh repo under the user's own account, so no check needed.
+    if (output_type !== "new") {
+      const pushUser = await db("users").where({ id: req.userId }).first();
+      if (!pushUser?.github_access_token) {
+        res.status(400).json({ error: "GitHub not connected" });
+        return;
+      }
+      try {
+        const repoInfo = await githubService.getRepoInfo(
+          decryptSecret(pushUser.github_access_token),
+          project.github_repo_full_name,
+        );
+        if (!repoInfo || !repoInfo.permissions.push) {
+          res.status(403).json({
+            error: "no_push_access",
+            message:
+              "Your GitHub account does not have write access to the original repository. Use 'New Repository' instead.",
+          });
+          return;
+        }
+      } catch (err: unknown) {
+        if ((err as { status?: number }).status === 401) {
+          res.status(401).json({ error: "github_token_expired", message: "Reconnect GitHub in Settings." });
+          return;
+        }
+        throw err;
+      }
     }
 
     try {
@@ -310,7 +339,7 @@ router.post(
         message =
           "Failed to push code — the repository may be in an unexpected state. Try creating a new repository.";
       }
-      console.error("[push] Error:", raw);
+      console.error("[push] Error:", redactSecrets(raw));
       res.status(500).json({ error: message });
     }
   },
@@ -320,19 +349,14 @@ router.post(
   "/:id/deploy",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
-    const migration = await db("migrations")
-      .where({ id: req.params.id })
-      .first();
-    if (!migration?.output_repo_url) {
-      res.status(400).json({ error: "Code must be pushed first" });
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
       return;
     }
-
-    const project = await db("projects")
-      .where({ id: migration.project_id, user_id: req.userId })
-      .first();
-    if (!project) {
-      res.status(404).json({ error: "Not found" });
+    const { migration, project } = owned;
+    if (!migration.output_repo_url) {
+      res.status(400).json({ error: "Code must be pushed first" });
       return;
     }
 
@@ -355,13 +379,13 @@ router.post(
         "",
       );
       let vercelProject = await vercelService.getProject(
-        user.vercel_access_token,
+        decryptSecret(user.vercel_access_token),
         project.name,
       );
 
       if (!vercelProject) {
         vercelProject = await vercelService.createProject(
-          user.vercel_access_token,
+          decryptSecret(user.vercel_access_token),
           project.name,
           repoFullName,
           {
@@ -373,7 +397,7 @@ router.post(
 
       const repoId = vercelProject.link?.repoId;
       const deployment = await vercelService.triggerDeployment(
-        user.vercel_access_token,
+        decryptSecret(user.vercel_access_token),
         vercelProject.name,
         migration.output_branch || "main",
         repoId,
@@ -407,7 +431,7 @@ router.post(
         message =
           "Could not link the GitHub repo to Vercel. Make sure your Vercel account has access to the repository.";
       }
-      console.error("[deploy] Error:", raw);
+      console.error("[deploy] Error:", redactSecrets(raw));
       await db("migrations")
         .where({ id: migration.id })
         .update({ status: "completed" });
@@ -423,21 +447,16 @@ router.post(
   "/:id/pay-overage",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
-    const migration = await db("migrations")
-      .where({ id: req.params.id })
-      .first();
-    if (!migration || migration.status !== "budget_exceeded") {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration } = owned;
+    if (migration.status !== "budget_exceeded") {
       res
         .status(400)
         .json({ error: "Migration is not awaiting overage payment" });
-      return;
-    }
-
-    const project = await db("projects")
-      .where({ id: migration.project_id, user_id: req.userId })
-      .first();
-    if (!project) {
-      res.status(404).json({ error: "Not found" });
       return;
     }
 
@@ -501,21 +520,16 @@ router.post(
   "/:id/verify-overage",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
-    const migration = await db("migrations")
-      .where({ id: req.params.id })
-      .first();
-    if (!migration || migration.status !== "budget_exceeded") {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration } = owned;
+    if (migration.status !== "budget_exceeded") {
       res
         .status(400)
         .json({ error: "Migration is not awaiting overage payment" });
-      return;
-    }
-
-    const project = await db("projects")
-      .where({ id: migration.project_id, user_id: req.userId })
-      .first();
-    if (!project) {
-      res.status(404).json({ error: "Not found" });
       return;
     }
 
@@ -587,26 +601,18 @@ router.post(
   async (req: AuthRequest, res: Response) => {
     const { model } = req.body;
 
-    const migration = await db("migrations")
-      .where({ id: req.params.id })
-      .first();
-    if (
-      !migration ||
-      !["failed", "running", "analyzing"].includes(migration.status)
-    ) {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration, project } = owned;
+    if (!["failed", "running", "analyzing"].includes(migration.status)) {
       res
         .status(400)
         .json({
           error: "Migration must be in a failed or stalled state to retry",
         });
-      return;
-    }
-
-    const project = await db("projects")
-      .where({ id: migration.project_id, user_id: req.userId })
-      .first();
-    if (!project) {
-      res.status(404).json({ error: "Not found" });
       return;
     }
 
@@ -683,20 +689,14 @@ router.post(
   "/:id/request-review",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
-    const migration = await db("migrations")
-      .where({ id: req.params.id })
-      .first();
-
-    if (!migration || !["completed", "failed", "reviewed"].includes(migration.status)) {
-      res.status(400).json({ error: "Migration must be completed or failed to request a review" });
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
       return;
     }
-
-    const project = await db("projects")
-      .where({ id: migration.project_id, user_id: req.userId })
-      .first();
-    if (!project) {
-      res.status(404).json({ error: "Not found" });
+    const { migration } = owned;
+    if (!["completed", "failed", "reviewed"].includes(migration.status)) {
+      res.status(400).json({ error: "Migration must be completed or failed to request a review" });
       return;
     }
 

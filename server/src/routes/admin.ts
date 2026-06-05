@@ -5,6 +5,7 @@ import { ANTHROPIC_PRICING } from "../types";
 import type { AuthRequest } from "../middleware/auth";
 import { requireAuth, requireAdmin } from "../middleware/auth";
 import { validateBody, validateQuery } from "../middleware/validate";
+import { getPresignedDownloadUrl } from "../services/s3";
 
 const AI_MODEL = (process.env.AI_MODEL || "claude-opus-4-7") as keyof typeof ANTHROPIC_PRICING;
 
@@ -13,6 +14,23 @@ function rawAnthropicCostCents(inputTokens: number, outputTokens: number): numbe
   return Math.ceil(
     (inputTokens / 1_000_000) * pricing.input +
     (outputTokens / 1_000_000) * pricing.output,
+  );
+}
+
+/**
+ * Total API cost we actually incurred for a migration: the analysis pass
+ * (always runs, often the only cost when a migration is never executed) PLUS
+ * the migration-execution tokens.
+ */
+function totalApiCostCents(m: {
+  analysis_input_tokens?: number | null;
+  analysis_output_tokens?: number | null;
+  actual_input_tokens?: number | null;
+  actual_output_tokens?: number | null;
+}): number {
+  return rawAnthropicCostCents(
+    (Number(m.analysis_input_tokens) || 0) + (Number(m.actual_input_tokens) || 0),
+    (Number(m.analysis_output_tokens) || 0) + (Number(m.actual_output_tokens) || 0),
   );
 }
 
@@ -56,8 +74,8 @@ router.get("/stats", async (_req: AuthRequest, res: Response) => {
 
   const totalRevenueCents = Number(revenue.total) || 0;
   const totalAnthropicCostCents = rawAnthropicCostCents(
-    Number(anthropicTokens?.total_input) || 0,
-    Number(anthropicTokens?.total_output) || 0,
+    (Number(anthropicTokens?.total_input) || 0) + (Number(anthropicTokens?.analysis_input) || 0),
+    (Number(anthropicTokens?.total_output) || 0) + (Number(anthropicTokens?.analysis_output) || 0),
   );
 
   res.json({
@@ -90,6 +108,8 @@ router.get("/cost-breakdown", async (_req: AuthRequest, res: Response) => {
       "migrations.files_migrated",
       "migrations.actual_input_tokens",
       "migrations.actual_output_tokens",
+      "migrations.analysis_input_tokens",
+      "migrations.analysis_output_tokens",
       "migrations.actual_cost_cents",
       "migrations.estimated_cost_cents",
       "migrations.created_at",
@@ -126,10 +146,7 @@ router.get("/cost-breakdown", async (_req: AuthRequest, res: Response) => {
 
   const rows = migrations.map((m: Record<string, unknown>) => {
     const rev = revenueMap.get(m.id as string) || 0;
-    const apiCost = rawAnthropicCostCents(
-      Number(m.actual_input_tokens) || 0,
-      Number(m.actual_output_tokens) || 0,
-    );
+    const apiCost = totalApiCostCents(m);
     return {
       ...m,
       raw_cost_cents: apiCost,
@@ -234,15 +251,22 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
     .filter((b: Record<string, unknown>) => b.status === "paid")
     .reduce((sum: number, b: Record<string, unknown>) => sum + (Number(b.billed_cost_cents) || 0), 0);
 
-  const apiCost = rawAnthropicCostCents(
+  const analysisCost = rawAnthropicCostCents(
+    migration.analysis_input_tokens || 0,
+    migration.analysis_output_tokens || 0,
+  );
+  const migrationCost = rawAnthropicCostCents(
     migration.actual_input_tokens || 0,
     migration.actual_output_tokens || 0,
   );
+  const apiCost = analysisCost + migrationCost;
 
   res.json({
     ...migration,
     project_name: project?.name || null,
     github_repo_full_name: project?.github_repo_full_name || null,
+    analysis_cost_cents: analysisCost,
+    migration_cost_cents: migrationCost,
     raw_cost_cents: apiCost,
     revenue_cents: revenueCents,
     margin_cents: revenueCents - apiCost,
@@ -315,7 +339,30 @@ router.get("/tickets", validateQuery(ticketsQuerySchema), async (req: AuthReques
   const [total] = await query.clone().count("id as count");
   const tickets = await query.orderBy("created_at", "desc").limit(Number(limit)).offset(offset);
 
-  res.json({ tickets, total: Number(total.count), page: Number(page), limit: Number(limit) });
+  // Attachments are private S3 keys; mint short-lived signed URLs for viewing.
+  const withSignedImages = await Promise.all(
+    tickets.map(async (t: { image_urls?: unknown }) => {
+      const keys: string[] = Array.isArray(t.image_urls)
+        ? (t.image_urls as string[])
+        : typeof t.image_urls === "string"
+          ? JSON.parse(t.image_urls || "[]")
+          : [];
+      const image_urls = await Promise.all(
+        keys.map(async (k) => {
+          // Back-compat: if a legacy full URL slipped in, pass it through.
+          if (k.startsWith("http://") || k.startsWith("https://")) return k;
+          try {
+            return await getPresignedDownloadUrl(k, 900);
+          } catch {
+            return "";
+          }
+        }),
+      );
+      return { ...t, image_urls: image_urls.filter(Boolean) };
+    }),
+  );
+
+  res.json({ tickets: withSignedImages, total: Number(total.count), page: Number(page), limit: Number(limit) });
 });
 
 router.patch("/tickets/:id", validateBody(updateTicketSchema), async (req: AuthRequest, res: Response) => {

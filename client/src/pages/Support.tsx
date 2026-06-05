@@ -36,9 +36,9 @@ export default function Support() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   async function uploadImage(file: File): Promise<string> {
-    const { uploadUrl, imageUrl } = await api.post<{
+    const { uploadUrl, key } = await api.post<{
       uploadUrl: string;
-      imageUrl: string;
+      key: string;
     }>("/support/upload-url", {
       filename: file.name,
       contentType: file.type,
@@ -50,7 +50,7 @@ export default function Support() {
       headers: { "Content-Type": file.type },
     });
 
-    return imageUrl;
+    return key;
   }
 
   function addFiles(fileList: FileList | null) {
@@ -89,9 +89,9 @@ export default function Support() {
 
     setSubmitting(true);
     try {
-      let imageUrls: string[] = [];
+      let imageKeys: string[] = [];
       if (type === "bug" && images.length > 0) {
-        imageUrls = await Promise.all(images.map((img) => uploadImage(img.file)));
+        imageKeys = await Promise.all(images.map((img) => uploadImage(img.file)));
       }
 
       await api.post("/support/tickets", {
@@ -99,7 +99,7 @@ export default function Support() {
         subject: subject.trim(),
         description: description.trim(),
         email: email.trim() || undefined,
-        image_urls: imageUrls,
+        image_keys: imageKeys,
       });
 
       setSubmitted(true);

@@ -160,8 +160,9 @@ export default function Privacy() {
               </li>
               <li>
                 <strong>OAuth tokens:</strong> GitHub and Vercel access tokens
-                are stored in the database and protected by Supabase's
-                encryption-at-rest.
+                are encrypted at the application layer (AES-256-GCM) before being
+                stored, on top of the database's own encryption-at-rest, and are
+                never returned to the browser.
               </li>
               <li>
                 <strong>Support images:</strong> Images uploaded with bug

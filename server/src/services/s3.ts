@@ -130,15 +130,25 @@ export function getWorkspacePrefix(
 export async function getPresignedUploadUrl(
   key: string,
   contentType: string,
-): Promise<{ uploadUrl: string; publicUrl: string }> {
-  const bucket = getBucket();
-  const region = process.env.AWS_REGION || "us-east-2";
+): Promise<{ uploadUrl: string; key: string }> {
   const cmd = new PutObjectCommand({
-    Bucket: bucket,
+    Bucket: getBucket(),
     Key: key,
     ContentType: contentType,
   });
   const uploadUrl = await getSignedUrl(getClient() as any, cmd, { expiresIn: 300 });
-  const publicUrl = `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
-  return { uploadUrl, publicUrl };
+  return { uploadUrl, key };
+}
+
+/**
+ * Generate a short-lived presigned GET URL for a private object. The bucket
+ * itself stays private (Block Public Access on); this is the only way objects
+ * are read, and only by authorized callers who already passed our auth checks.
+ */
+export async function getPresignedDownloadUrl(
+  key: string,
+  expiresIn = 300,
+): Promise<string> {
+  const cmd = new GetObjectCommand({ Bucket: getBucket(), Key: key });
+  return getSignedUrl(getClient() as any, cmd, { expiresIn });
 }
