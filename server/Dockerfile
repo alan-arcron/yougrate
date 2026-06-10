@@ -18,4 +18,4 @@ COPY migrations ./migrations
 COPY knexfile.ts ./knexfile.ts
 
 EXPOSE 3001
-CMD ["npx", "tsx", "dist/index.js"]
+CMD ["sh", "-c", "npx tsx node_modules/.bin/knex migrate:latest --knexfile knexfile.ts && npx tsx dist/index.js"]
