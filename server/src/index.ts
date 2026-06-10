@@ -142,6 +142,16 @@ app.post(
               );
             }
           }
+        } else if (type === "code_review" && migrationId) {
+          const updated = await db("migrations")
+            .where({ id: migrationId })
+            .whereIn("status", ["completed", "failed", "reviewed"])
+            .update({ status: "pending_review", addon_code_review: true });
+          if (updated > 0) {
+            console.log(
+              `[webhook] Code review paid for migration ${migrationId.slice(0, 8)}`,
+            );
+          }
         } else if (migrationId) {
           const updated = await db("migrations")
             .where({ id: migrationId, status: "estimated" })

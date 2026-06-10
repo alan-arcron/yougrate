@@ -203,6 +203,23 @@ export default function MigrationView() {
     };
   }, [searchParams, migration?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-verify code review payment when returning from Stripe
+  useEffect(() => {
+    if (searchParams.get("review_paid") !== "true") return;
+    let cancelled = false;
+    api
+      .post<{ paid: boolean }>(`/migrations/${migrationId}/verify-review`)
+      .then((res) => {
+        if (!cancelled && res.paid) {
+          toast.success("Payment confirmed — code review requested!");
+          setPollKey((k) => k + 1);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handlePayOverage() {
     setPaying(true);
     try {
@@ -879,7 +896,7 @@ export default function MigrationView() {
               <div>
                 <p className="text-sm font-medium">Request Code Review</p>
                 <p className="text-xs text-muted-foreground">
-                  Have a senior engineer review your migrated code
+                  Have a senior engineer review your migrated code — $75
                 </p>
               </div>
             </div>
@@ -888,7 +905,14 @@ export default function MigrationView() {
               size="sm"
               onClick={async () => {
                 try {
-                  await api.post(`/migrations/${migrationId}/request-review`);
+                  const res = await api.post<{
+                    checkout_url?: string;
+                    status?: string;
+                  }>(`/migrations/${migrationId}/request-review`);
+                  if (res.checkout_url) {
+                    window.location.href = res.checkout_url;
+                    return;
+                  }
                   toast.success("Code review requested!");
                   setPollKey((k) => k + 1);
                 } catch (err: unknown) {
@@ -898,7 +922,7 @@ export default function MigrationView() {
               }}
             >
               <UserCheck className="mr-2 h-3.5 w-3.5" />
-              Request Review
+              Request Review — $75
             </Button>
           </CardContent>
         </Card>

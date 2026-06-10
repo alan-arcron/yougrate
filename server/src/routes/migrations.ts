@@ -13,6 +13,7 @@ import {
 import {
   createCheckoutForMigration,
   createCheckoutForOverage,
+  createCheckoutForReview,
   verifyCheckoutPaid,
   addonTotalCents,
 } from "../services/billing";
@@ -700,7 +701,8 @@ router.post(
       return;
     }
 
-    if (isAdmin(req.userEmail)) {
+    // Already paid for (e.g. purchased as an add-on during checkout): grant directly.
+    if (migration.addon_code_review || isAdmin(req.userEmail)) {
       await db("migrations")
         .where({ id: migration.id })
         .update({ status: "pending_review", addon_code_review: true });
@@ -708,11 +710,59 @@ router.post(
       return;
     }
 
+    const user = await db("users").where({ id: req.userId }).first();
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const { checkoutUrl } = await createCheckoutForReview(
+      req.userId!,
+      user.email,
+      migration.id,
+    );
+
+    res.json({ checkout_url: checkoutUrl });
+  },
+);
+
+router.post(
+  "/:id/verify-review",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration } = owned;
+
+    const billingEvent = await db("billing_events")
+      .where({ migration_id: migration.id, status: "pending" })
+      .orderBy("created_at", "desc")
+      .first();
+
+    if (!billingEvent?.stripe_invoice_id) {
+      res.status(400).json({ error: "No payment session found" });
+      return;
+    }
+
+    const paid = await verifyCheckoutPaid(billingEvent.stripe_invoice_id);
+    if (!paid) {
+      res.json({ paid: false });
+      return;
+    }
+
+    await db("billing_events")
+      .where({ id: billingEvent.id, status: "pending" })
+      .update({ status: "paid" });
+
     await db("migrations")
       .where({ id: migration.id })
+      .whereIn("status", ["completed", "failed", "reviewed"])
       .update({ status: "pending_review", addon_code_review: true });
 
-    res.json({ status: "pending_review" });
+    res.json({ paid: true, status: "pending_review" });
   },
 );
 

@@ -260,6 +260,57 @@ export async function createCheckoutForOverage(
   return { checkoutUrl: session.url!, sessionId: session.id };
 }
 
+export async function createCheckoutForReview(
+  userId: string,
+  email: string,
+  migrationId: string,
+): Promise<{ checkoutUrl: string; sessionId: string }> {
+  const s = getStripe();
+  const customerId = await getOrCreateCustomer(userId, email);
+  const clientUrl = process.env.CLIENT_URL || "http://localhost:5175";
+
+  const migration = await db("migrations").where({ id: migrationId }).first();
+  const projectId = migration?.project_id || "";
+
+  const session = await s.checkout.sessions.create({
+    customer: customerId,
+    mode: "payment",
+    line_items: [
+      {
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: "Senior engineer code review",
+            description:
+              "A human senior engineer reviews your migrated code before delivery",
+          },
+          unit_amount: ADDON_CODE_REVIEW_CENTS,
+        },
+        quantity: 1,
+      },
+    ],
+    allow_promotion_codes: true,
+    metadata: { migrationId, userId, type: "code_review" },
+    payment_intent_data: { receipt_email: email },
+    success_url: `${clientUrl}/project/${projectId}/migration/${migrationId}?review_paid=true`,
+    cancel_url: `${clientUrl}/project/${projectId}/migration/${migrationId}?review_cancelled=true`,
+  });
+
+  await db("billing_events").insert({
+    user_id: userId,
+    migration_id: migrationId,
+    input_tokens: 0,
+    output_tokens: 0,
+    raw_cost_cents: 0,
+    billed_cost_cents: ADDON_CODE_REVIEW_CENTS,
+    markup_multiplier: 1,
+    stripe_invoice_id: session.id,
+    status: "pending",
+  });
+
+  return { checkoutUrl: session.url!, sessionId: session.id };
+}
+
 export async function createBillingPortalSession(
   customerId: string,
 ): Promise<{ url: string }> {
