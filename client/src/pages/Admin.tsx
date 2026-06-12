@@ -28,6 +28,7 @@ import {
   TrendingUp,
   Eye,
   ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 
 interface Stats {
@@ -153,6 +154,12 @@ interface MigrationDetail {
   raw_cost_cents: number;
   revenue_cents: number;
   margin_cents: number;
+  customer_price: {
+    base_fee_cents: number;
+    token_billed_cents: number;
+    addon_code_review_cents: number;
+    total_cents: number;
+  };
   retry_count: number;
   error_message: string | null;
   output_repo_url: string | null;
@@ -182,6 +189,7 @@ export default function Admin() {
   const [ticketFilter, setTicketFilter] = useState("open");
   const [expandedUser, setExpandedUser] = useState<string | null>(null);
   const [userMigrations, setUserMigrations] = useState<UserMigration[]>([]);
+  const [resettingUser, setResettingUser] = useState<string | null>(null);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingTickets, setLoadingTickets] = useState(false);
   const [editingTicket, setEditingTicket] = useState<string | null>(null);
@@ -262,6 +270,41 @@ export default function Admin() {
       toast.error("Failed to update review status");
     } finally {
       setUpdatingReview(null);
+    }
+  }
+
+  async function resetAnalyses(userId: string) {
+    if (
+      !window.confirm(
+        "Reset this user's free analysis usage back to 0? They'll get their full free analyses again.",
+      )
+    ) {
+      return;
+    }
+    setResettingUser(userId);
+    try {
+      const updated = await api.post<{
+        id: string;
+        free_analyses_used: number;
+        free_analyses_limit: number;
+      }>(`/admin/users/${userId}/reset-analyses`);
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === userId
+            ? {
+                ...u,
+                free_analyses_used: updated.free_analyses_used,
+                free_analyses_limit: updated.free_analyses_limit,
+              }
+            : u,
+        ),
+      );
+      toast.success("Analysis count reset");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(msg);
+    } finally {
+      setResettingUser(null);
     }
   }
 
@@ -521,9 +564,25 @@ export default function Admin() {
                             <p className="text-xs text-muted-foreground">
                               Analyses
                             </p>
-                            <p className="font-medium">
-                              {u.free_analyses_used} / {u.free_analyses_limit}
-                            </p>
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium">
+                                {u.free_analyses_used} / {u.free_analyses_limit}
+                              </p>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-xs"
+                                disabled={resettingUser === u.id}
+                                onClick={() => resetAnalyses(u.id)}
+                              >
+                                {resettingUser === u.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="mr-1 h-3 w-3" />
+                                )}
+                                Reset
+                              </Button>
+                            </div>
                           </div>
                           <div>
                             <p className="text-xs text-muted-foreground">
@@ -590,6 +649,52 @@ export default function Admin() {
                                       </div>
                                     ) : migrationDetail ? (
                                       <>
+                                        {/* What the customer pays */}
+                                        {migrationDetail.customer_price && (
+                                          <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                                            <div className="flex items-center justify-between mb-2">
+                                              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                                                What the customer pays
+                                              </p>
+                                              <p className="text-lg font-mono font-bold text-primary">
+                                                $
+                                                {(
+                                                  migrationDetail.customer_price
+                                                    .total_cents / 100
+                                                ).toFixed(2)}
+                                              </p>
+                                            </div>
+                                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground font-mono">
+                                              <span>
+                                                Base fee $
+                                                {(
+                                                  migrationDetail.customer_price
+                                                    .base_fee_cents / 100
+                                                ).toFixed(2)}
+                                              </span>
+                                              <span>
+                                                + AI tokens $
+                                                {(
+                                                  migrationDetail.customer_price
+                                                    .token_billed_cents / 100
+                                                ).toFixed(2)}
+                                              </span>
+                                              {migrationDetail.customer_price
+                                                .addon_code_review_cents > 0 && (
+                                                <span>
+                                                  + Code review $
+                                                  {(
+                                                    migrationDetail
+                                                      .customer_price
+                                                      .addon_code_review_cents /
+                                                    100
+                                                  ).toFixed(2)}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+
                                         {/* Cost comparison */}
                                         <div>
                                           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Cost Breakdown</p>

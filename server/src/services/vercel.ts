@@ -17,6 +17,26 @@ export async function vercelFetch(token: string, path: string, options: RequestI
   });
 }
 
+export type TokenStatus = "valid" | "invalid" | "unknown";
+
+/**
+ * Check whether a Vercel token is still valid (not expired/revoked) by hitting
+ * the authenticated /v2/user endpoint.
+ * - "valid":   2xx response
+ * - "invalid": 401/403 (expired or revoked token)
+ * - "unknown": any other status or a network error (don't claim it's expired)
+ */
+export async function verifyToken(token: string): Promise<TokenStatus> {
+  try {
+    const res = await vercelFetch(token, "/v2/user");
+    if (res.ok) return "valid";
+    if (res.status === 401 || res.status === 403) return "invalid";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 export async function createProject(
   token: string,
   name: string,
@@ -138,6 +158,50 @@ export async function getProject(
   const res = await vercelFetch(token, `/v9/projects/${encodeURIComponent(name)}`);
   if (!res.ok) return null;
   return await res.json() as VercelProject;
+}
+
+/**
+ * Create or update environment variables on a Vercel project in a single batch.
+ *
+ * Uses `?upsert=true` so existing keys are overwritten instead of erroring with
+ * ENV_CONFLICT. Values are stored as type "sensitive" — Vercel will not echo
+ * them back via the API/dashboard after creation, matching our "never expose
+ * secrets again" posture. Targets all environments so the values apply to
+ * production, preview, and development builds.
+ *
+ * Returns the list of keys that were submitted (names only — never values).
+ */
+export async function upsertEnvVars(
+  token: string,
+  projectIdOrName: string,
+  vars: Record<string, string>,
+): Promise<string[]> {
+  const entries = Object.entries(vars);
+  if (entries.length === 0) return [];
+
+  const body = entries.map(([key, value]) => ({
+    key,
+    value,
+    type: "sensitive",
+    target: ["production", "preview", "development"],
+  }));
+
+  const res = await vercelFetch(
+    token,
+    `/v10/projects/${encodeURIComponent(projectIdOrName)}/env?upsert=true`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+
+  if (!res.ok) {
+    const err = (await res.json()) as Record<string, unknown>;
+    // Note: do not include `body` (contains secret values) in the error.
+    throw new Error(`Vercel env API error: ${JSON.stringify(err)}`);
+  }
+
+  return entries.map(([key]) => key);
 }
 
 export async function getLatestDeployment(

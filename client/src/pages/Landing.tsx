@@ -46,6 +46,12 @@ const FEATURES = [
       "Claude analyzes every file in your repo to detect platform-specific code and plan the migration automatically.",
   },
   {
+    icon: Database,
+    title: "Database Schema Included",
+    description:
+      "Every migration generates your full Supabase schema — tables, relationships, indexes, and RLS policies — and can create them in your database for you. No add-on, no extra fee.",
+  },
+  {
     icon: Wrench,
     title: "Automatic Error Fixes",
     description:
@@ -93,7 +99,7 @@ const STEPS = [
     number: "3",
     title: "One Click",
     description:
-      "AI analyzes, rewrites, pushes, and deploys to Vercel. You're done.",
+      "AI rewrites your code, generates your database schema, pushes to GitHub, and deploys to Vercel. You're done.",
   },
 ];
 
@@ -158,9 +164,9 @@ export default function Landing() {
             <span className="text-primary">Own it.</span>
           </h1>
           <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            Migrate your vibe-coded apps off Lovable, Base44, and other
-            platforms to Vercel and Supabase in minutes. One click. Full
-            ownership.
+            Migrate your vibe-coded apps &mdash; code and database &mdash; off
+            Lovable, Base44, and other platforms to Vercel and Supabase in
+            minutes. One click. Full ownership.
           </p>
           <div className="mt-10 flex items-center justify-center gap-4">
             <Button
@@ -244,12 +250,13 @@ export default function Landing() {
                 <CardDescription className="text-primary font-medium uppercase tracking-wider text-xs">
                   Migrate with Yougrate
                 </CardDescription>
-                <CardTitle className="text-2xl">One-time from $20</CardTitle>
+                <CardTitle className="text-2xl">One-time from $35</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 {[
                   "Pay once, own your code forever",
                   "Standard React + Supabase Postgres",
+                  "Database schema & tables migrated for you",
                   "Vercel free tier handles most apps",
                   "Supabase free tier: 500MB + 50K MAU",
                   "Scale when you need to, on your terms",
@@ -462,12 +469,13 @@ export default function Landing() {
                     <Logo className="h-5 w-5" />
                     <span className="font-medium">Migration</span>
                   </div>
-                  <span className="font-bold">$20 base + token usage</span>
+                  <span className="font-bold">$35 base + token usage</span>
                 </div>
                 <p className="text-xs text-muted-foreground px-4 -mt-1">
-                  $20 flat fee covers overhead. Additional cost scales with your
-                  codebase size based on AI tokens consumed. You see the exact
-                  price before confirming.
+                  $35 flat fee covers overhead and full database schema
+                  generation (tables, RLS, indexes). Additional cost scales with
+                  your codebase size based on AI tokens consumed. You see the
+                  exact price before confirming.
                 </p>
 
                 <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-muted/50">

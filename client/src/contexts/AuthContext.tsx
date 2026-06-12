@@ -10,6 +10,7 @@ interface UserProfile {
   avatar_url: string | null;
   github_connected: boolean;
   vercel_connected: boolean;
+  railway_connected: boolean;
   github_username: string | null;
   is_admin?: boolean;
 }

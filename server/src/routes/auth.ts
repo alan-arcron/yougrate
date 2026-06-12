@@ -4,7 +4,9 @@ import { db } from "../db";
 import type { AuthRequest } from "../middleware/auth";
 import { requireAuth, isAdmin } from "../middleware/auth";
 import { validateBody } from "../middleware/validate";
-import { encryptSecret } from "../utils/crypto";
+import { encryptSecret, decryptSecret } from "../utils/crypto";
+import * as vercelService from "../services/vercel";
+import * as railwayService from "../services/railway";
 
 const syncSchema = z.object({
   name: z.string().max(200).nullish(),
@@ -19,6 +21,10 @@ const githubTokenSchema = z.object({
 }).strip();
 
 const vercelTokenSchema = z.object({
+  access_token: z.string().min(1, "access_token is required").max(500),
+}).strip();
+
+const railwayTokenSchema = z.object({
   access_token: z.string().min(1, "access_token is required").max(500),
 }).strip();
 
@@ -58,9 +64,11 @@ router.post("/sync", requireAuth, validateBody(syncSchema), async (req: AuthRequ
     ...user,
     github_connected: !!user?.github_access_token,
     vercel_connected: !!user?.vercel_access_token,
+    railway_connected: !!user?.railway_access_token,
     is_admin: isAdmin(user?.email),
     github_access_token: undefined,
     vercel_access_token: undefined,
+    railway_access_token: undefined,
   });
 });
 
@@ -75,9 +83,11 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response) => {
     ...user,
     github_connected: !!user.github_access_token,
     vercel_connected: !!user.vercel_access_token,
+    railway_connected: !!user.railway_access_token,
     is_admin: isAdmin(user.email),
     github_access_token: undefined,
     vercel_access_token: undefined,
+    railway_access_token: undefined,
   });
 });
 
@@ -102,6 +112,41 @@ router.post("/vercel-token", requireAuth, validateBody(vercelTokenSchema), async
   });
 
   res.json({ connected: true });
+});
+
+router.get("/vercel-status", requireAuth, async (req: AuthRequest, res: Response) => {
+  const user = await db("users").where({ id: req.userId }).first();
+  if (!user?.vercel_access_token) {
+    res.json({ connected: false, status: "disconnected" });
+    return;
+  }
+  const status = await vercelService.verifyToken(
+    decryptSecret(user.vercel_access_token),
+  );
+  res.json({ connected: true, status });
+});
+
+router.post("/railway-token", requireAuth, validateBody(railwayTokenSchema), async (req: AuthRequest, res: Response) => {
+  const { access_token } = req.body;
+
+  await db("users").where({ id: req.userId }).update({
+    railway_access_token: encryptSecret(access_token),
+    updated_at: new Date().toISOString(),
+  });
+
+  res.json({ connected: true });
+});
+
+router.get("/railway-status", requireAuth, async (req: AuthRequest, res: Response) => {
+  const user = await db("users").where({ id: req.userId }).first();
+  if (!user?.railway_access_token) {
+    res.json({ connected: false, status: "disconnected" });
+    return;
+  }
+  const status = await railwayService.verifyToken(
+    decryptSecret(user.railway_access_token),
+  );
+  res.json({ connected: true, status });
 });
 
 export default router;

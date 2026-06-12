@@ -2,10 +2,12 @@ import { Router, Response } from "express";
 import { z } from "zod";
 import { db } from "../db";
 import type { AuthRequest } from "../middleware/auth";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, isAdmin } from "../middleware/auth";
 import { validateBody } from "../middleware/validate";
 import * as githubService from "../services/github";
-import { decryptSecret } from "../utils/crypto";
+import * as s3 from "../services/s3";
+import { validateSupabaseConnectionString } from "../services/schema-apply";
+import { decryptSecret, encryptSecret } from "../utils/crypto";
 
 const createProjectSchema = z.object({
   name: z.string().max(200).optional(),
@@ -17,6 +19,7 @@ const createProjectSchema = z.object({
 const updateSupabaseSchema = z.object({
   supabase_url: z.string().url().max(500).nullish(),
   supabase_anon_key: z.string().max(500).nullish(),
+  connection_string: z.string().max(1000).nullish(),
 }).strip();
 
 const router = Router();
@@ -117,19 +120,36 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     .where({ project_id: project.id })
     .orderBy("created_at", "desc");
 
-  res.json({ ...project, migrations });
+  // Never expose the (encrypted) DB connection string to the client.
+  const { supabase_db_url, ...safeProject } = project;
+  void supabase_db_url;
+  res.json({ ...safeProject, migrations });
 });
 
 router.patch("/:id/supabase", requireAuth, validateBody(updateSupabaseSchema), async (req: AuthRequest, res: Response) => {
-  const { supabase_url, supabase_anon_key } = req.body;
+  const { supabase_url, supabase_anon_key, connection_string } = req.body;
+
+  const updates: Record<string, unknown> = {
+    supabase_url,
+    supabase_anon_key,
+    updated_at: new Date().toISOString(),
+  };
+
+  // Connection string is optional. Validate + encrypt before storing; ignore
+  // empty strings so we don't clobber a previously saved value.
+  const conn = connection_string?.trim();
+  if (conn) {
+    const valid = validateSupabaseConnectionString(conn);
+    if (!valid.ok) {
+      res.status(400).json({ error: valid.error });
+      return;
+    }
+    updates.supabase_db_url = encryptSecret(conn);
+  }
 
   const [project] = await db("projects")
     .where({ id: req.params.id, user_id: req.userId })
-    .update({
-      supabase_url,
-      supabase_anon_key,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updates)
     .returning("*");
 
   if (!project) {
@@ -137,18 +157,37 @@ router.patch("/:id/supabase", requireAuth, validateBody(updateSupabaseSchema), a
     return;
   }
 
-  res.json(project);
+  const { supabase_db_url, ...safeProject } = project;
+  void supabase_db_url;
+  res.json(safeProject);
 });
 
 router.delete("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
-  const deleted = await db("projects")
-    .where({ id: req.params.id, user_id: req.userId })
-    .del();
+  // Project deletion is an admin-only operation. Admins may delete any project.
+  if (!isAdmin(req.userEmail)) {
+    res.status(403).json({ error: "Admin access required" });
+    return;
+  }
 
-  if (!deleted) {
+  const project = await db("projects").where({ id: req.params.id }).first();
+  if (!project) {
     res.status(404).json({ error: "Not found" });
     return;
   }
+
+  // Best-effort cleanup of S3 workspaces for this project's migrations.
+  try {
+    await s3.deleteWorkspace(`workspaces/${project.id}`);
+  } catch (err) {
+    console.error(
+      `[projects] Failed to clean S3 for project ${project.id.slice(0, 8)}:`,
+      err,
+    );
+  }
+
+  // DB cascade removes migrations + migration_files; billing_events are
+  // preserved (migration_id is set null) so revenue records stay intact.
+  await db("projects").where({ id: project.id }).del();
 
   res.json({ deleted: true });
 });

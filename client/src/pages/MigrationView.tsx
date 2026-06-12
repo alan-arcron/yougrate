@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams, useSearchParams, Link } from "react-router-dom";
+import {
+  useNavigate,
+  useParams,
+  useSearchParams,
+  Link,
+} from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -16,6 +21,14 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft,
   CheckCircle2,
   Clock,
@@ -31,6 +44,11 @@ import {
   UserCheck,
   Info,
   ExternalLink,
+  TrendingDown,
+  KeyRound,
+  Server,
+  Zap,
+  Upload,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -49,6 +67,16 @@ interface MigrationDetail {
   status: string;
   detected_platform: string | null;
   detected_services: string[];
+  backend_type: "supabase_only" | "edge_functions" | "server" | null;
+  backend_details: {
+    reason?: string;
+    server_dir?: string;
+    start_command?: string;
+    edge_functions?: string[];
+  } | null;
+  railway_project_id: string | null;
+  railway_service_id: string | null;
+  railway_service_domain: string | null;
   total_files: number;
   files_to_migrate: number;
   files_migrated: number;
@@ -65,6 +93,10 @@ interface MigrationDetail {
   error_message: string | null;
   committed_secrets: string[];
   addon_code_review: boolean;
+  addon_data_migration: boolean;
+  supabase_url: string | null;
+  supabase_anon_key: string | null;
+  has_db_url: boolean;
   migration_log: { timestamp: string; message: string; level: string }[];
   files: MigrationFile[];
   started_at: string | null;
@@ -78,6 +110,232 @@ const FILE_STATUS_ICON: Record<string, typeof CheckCircle2> = {
   failed: AlertCircle,
   skipped: Clock,
 };
+
+function BreakEvenCalculator({
+  migrationCostCents,
+  platform,
+  monthlySpend,
+  setMonthlySpend,
+  claudeSpend,
+  setClaudeSpend,
+}: {
+  migrationCostCents: number;
+  platform: string | null;
+  monthlySpend: string | null;
+  setMonthlySpend: (v: string) => void;
+  claudeSpend: string;
+  setClaudeSpend: (v: string) => void;
+}) {
+  const platformLabels: Record<string, string> = {
+    base44: "Base44",
+    lovable: "Lovable",
+    replit: "Replit",
+    bolt: "Bolt",
+  };
+  const platformDefaults: Record<string, number> = {
+    base44: 40,
+    lovable: 25,
+    replit: 25,
+    bolt: 20,
+  };
+  const platformKey = platform ?? "";
+  const platformLabel = platformLabels[platformKey] ?? "your old platform";
+  // Until the user edits the field, fall back to a per-platform default.
+  const effectiveSpend =
+    monthlySpend ?? String(platformDefaults[platformKey] ?? 30);
+
+  const migrationCost = migrationCostCents / 100;
+  const current = parseFloat(effectiveSpend) || 0;
+  const claude = parseFloat(claudeSpend) || 0;
+  const savings = current - claude;
+  const rawMonths = savings > 0 ? migrationCost / savings : null;
+  const months = rawMonths === null ? null : Math.max(1, Math.ceil(rawMonths));
+  return (
+    <div className="my-4 p-4 rounded-lg border border-green-600/30 bg-green-600/5">
+      <div className="flex items-center gap-2 mb-3">
+        <TrendingDown className="h-4 w-4 text-green-600" />
+        <p className="text-sm font-medium">When this pays for itself</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-xs text-muted-foreground">
+            Current cost on {platformLabel} / mo
+          </span>
+          <div className="relative mt-1">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+              $
+            </span>
+            <input
+              type="number"
+              min="0"
+              inputMode="decimal"
+              value={effectiveSpend}
+              onChange={(e) => setMonthlySpend(e.target.value)}
+              className="w-full pl-6 pr-2 py-1.5 text-sm rounded-md border border-border bg-white"
+            />
+          </div>
+        </label>
+        <label className="block">
+          <span className="text-xs text-muted-foreground">
+            Cost on Claude (Pro) / mo
+          </span>
+          <div className="relative mt-1">
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+              $
+            </span>
+            <input
+              type="number"
+              min="0"
+              inputMode="decimal"
+              value={claudeSpend}
+              onChange={(e) => setClaudeSpend(e.target.value)}
+              className="w-full pl-6 pr-2 py-1.5 text-sm rounded-md border border-border bg-white"
+            />
+          </div>
+        </label>
+      </div>
+      {months !== null ? (
+        <p className="text-sm mt-3">
+          Break even in{" "}
+          <strong className="text-green-700 dark:text-green-500">
+            ~{months} month{months === 1 ? "" : "s"}
+          </strong>
+          , then save{" "}
+          <strong className="text-green-700 dark:text-green-500">
+            ${savings.toFixed(0)}/mo
+          </strong>{" "}
+          after that.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground mt-3">
+          Enter a current cost higher than your Claude cost to see your
+          break-even point.
+        </p>
+      )}
+      <p className="text-[11px] text-muted-foreground mt-1.5">
+        One-time migration of ${migrationCost.toFixed(2)}
+        {savings > 0 ? ` ÷ $${savings.toFixed(0)}/mo saved` : ""}. Estimate only
+        — adjust the numbers to match your plans.
+      </p>
+    </div>
+  );
+}
+
+function BackendBanner({
+  type,
+  details,
+}: {
+  type: MigrationDetail["backend_type"];
+  details: MigrationDetail["backend_details"];
+}) {
+  if (!type) return null;
+
+  if (type === "supabase_only") {
+    return (
+      <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+        <Zap className="h-4 w-4 mt-0.5 shrink-0 text-green-600" />
+        <p className="leading-relaxed">
+          <span className="font-medium text-foreground">
+            Fully serverless.
+          </span>{" "}
+          This app talks directly to Supabase, so it deploys cleanly to Vercel +
+          Supabase with no separate backend to host.
+        </p>
+      </div>
+    );
+  }
+
+  if (type === "edge_functions") {
+    const fns = details?.edge_functions ?? [];
+    return (
+      <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+        <Zap className="h-4 w-4 mt-0.5 shrink-0" />
+        <div className="leading-relaxed space-y-1">
+          <p>
+            <span className="font-medium">
+              Uses serverless backend functions.
+            </span>{" "}
+            {fns.length > 0
+              ? `Detected ${fns.length} function(s): ${fns.join(", ")}. `
+              : ""}
+            These run as Supabase Edge Functions, not on Vercel. After your
+            migration you&apos;ll deploy them to your Supabase project (one-click
+            automation coming soon).
+          </p>
+          <a
+            href="https://supabase.com/docs/guides/functions/deploy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-amber-900 underline"
+          >
+            How to deploy Edge Functions
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // type === "server"
+  const dir = details?.server_dir && details.server_dir !== "." ? details.server_dir : null;
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+      <Server className="h-4 w-4 mt-0.5 shrink-0" />
+      <div className="leading-relaxed space-y-1">
+        <p>
+          <span className="font-medium">
+            This app needs a persistent backend server
+          </span>
+          {dir ? (
+            <>
+              {" "}
+              (detected in <code className="font-mono">{dir}/</code>)
+            </>
+          ) : null}
+          , which Vercel can&apos;t host. The frontend still deploys to Vercel;
+          after you push your code, use the{" "}
+          <span className="font-medium">Backend Server (Railway)</span> section
+          below to deploy the server to{" "}
+          <a
+            href="https://railway.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-red-900 underline"
+          >
+            Railway
+            <ExternalLink className="h-3 w-3" />
+          </a>{" "}
+          (~$5/mo).
+        </p>
+        {details?.start_command ? (
+          <p className="text-[11px]">
+            Start command: <code className="font-mono">{details.start_command}</code>
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Preview the variable names in pasted .env text (client-side only, for display).
+ * Mirrors the server parser but returns just the keys — values are never shown.
+ */
+function previewEnvKeys(text: string): string[] {
+  const keys: string[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) line = line.slice(7).trim();
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && !keys.includes(key)) {
+      keys.push(key);
+    }
+  }
+  return keys;
+}
 
 export default function MigrationView() {
   const { profile } = useAuth();
@@ -93,8 +351,28 @@ export default function MigrationView() {
   const [pollKey, setPollKey] = useState(0);
   const [repoName, setRepoName] = useState("");
   const [pushType, setPushType] = useState<"new" | "branch">("new");
-  const [addonDataMigration, setAddonDataMigration] = useState(false);
   const [addonCodeReview, setAddonCodeReview] = useState(false);
+  const [supabaseUrl, setSupabaseUrl] = useState<string | null>(null);
+  const [supabaseKey, setSupabaseKey] = useState<string | null>(null);
+  const [monthlySpend, setMonthlySpend] = useState<string | null>(null);
+  const [claudeSpend, setClaudeSpend] = useState("20");
+  const [schemaDialogOpen, setSchemaDialogOpen] = useState(false);
+  const [dbConnString, setDbConnString] = useState("");
+  const [rememberDbConn, setRememberDbConn] = useState(false);
+  const [applyingSchema, setApplyingSchema] = useState(false);
+  const [schemaApplied, setSchemaApplied] = useState(false);
+  const [envText, setEnvText] = useState("");
+  const [pushingEnv, setPushingEnv] = useState(false);
+  const [pushedEnvKeys, setPushedEnvKeys] = useState<string[] | null>(null);
+  const [deployingRailway, setDeployingRailway] = useState(false);
+  const [railwayGithubHelp, setRailwayGithubHelp] = useState<string | null>(
+    null,
+  );
+  const [railwayEnvText, setRailwayEnvText] = useState("");
+  const [pushingRailwayEnv, setPushingRailwayEnv] = useState(false);
+  const [pushedRailwayEnvKeys, setPushedRailwayEnvKeys] = useState<
+    string[] | null
+  >(null);
   const [postDeployChecks, setPostDeployChecks] = useState<
     Record<string, boolean>
   >({});
@@ -239,12 +517,22 @@ export default function MigrationView() {
   }
 
   async function handlePayAndStart() {
+    const url = (supabaseUrl ?? migration?.supabase_url ?? "").trim();
+    const key = (supabaseKey ?? migration?.supabase_anon_key ?? "").trim();
+    if (!url || !key) {
+      toast.error("Enter your Supabase URL and anon key before continuing.");
+      return;
+    }
     setPaying(true);
     try {
+      await api.patch(`/projects/${projectId}/supabase`, {
+        supabase_url: url,
+        supabase_anon_key: key,
+        connection_string: dbConnString.trim() || undefined,
+      });
       const res = await api.post<{ checkout_url?: string; paid?: boolean }>(
         `/migrations/${migrationId}/confirm`,
         {
-          addon_data_migration: addonDataMigration,
           addon_code_review: addonCodeReview,
         },
       );
@@ -276,6 +564,134 @@ export default function MigrationView() {
     } finally {
       setPushing(false);
     }
+  }
+
+  async function handleApplySchema() {
+    setApplyingSchema(true);
+    try {
+      await api.post(`/migrations/${migrationId}/apply-schema`, {
+        connection_string: dbConnString.trim() || undefined,
+        save: rememberDbConn,
+      });
+      toast.success(
+        "Schema applied — tables created in your Supabase project!",
+      );
+      setSchemaApplied(true);
+      setSchemaDialogOpen(false);
+      setDbConnString("");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(msg);
+    } finally {
+      setApplyingSchema(false);
+    }
+  }
+
+  async function handlePushEnv() {
+    if (!envText.trim()) {
+      toast.error("Paste your .env contents or choose a file first.");
+      return;
+    }
+    setPushingEnv(true);
+    try {
+      const res = await api.post<{ keys: string[]; count: number }>(
+        `/migrations/${migrationId}/env`,
+        { env: envText },
+      );
+      setPushedEnvKeys(res.keys);
+      setEnvText("");
+      toast.success(
+        `Pushed ${res.count} variable${res.count === 1 ? "" : "s"} to Vercel.`,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(msg);
+    } finally {
+      setPushingEnv(false);
+    }
+  }
+
+  function handleEnvFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setEnvText(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.readAsText(file);
+    // Reset so selecting the same file again re-triggers onChange.
+    e.target.value = "";
+  }
+
+  async function handleDeployRailway() {
+    setDeployingRailway(true);
+    setRailwayGithubHelp(null);
+    try {
+      const res = await api.post<{
+        domain: string | null;
+        api_url_wired: boolean;
+      }>(`/migrations/${migrationId}/deploy-railway`);
+      toast.success(
+        res.domain
+          ? "Backend deploying to Railway..."
+          : "Backend service created on Railway...",
+      );
+      if (res.api_url_wired) {
+        toast.success("Backend URL wired into your Vercel frontend.");
+      }
+      fetchMigration();
+    } catch (err: unknown) {
+      const e = err as {
+        message?: string;
+        data?: { needs_github_connect?: boolean; github_app_url?: string };
+      };
+      if (e.data?.needs_github_connect) {
+        setRailwayGithubHelp(
+          e.data.github_app_url ||
+            "https://github.com/apps/railway/installations/new",
+        );
+      }
+      toast.error(e.message || "Failed to deploy backend to Railway.");
+    } finally {
+      setDeployingRailway(false);
+    }
+  }
+
+  async function handlePushRailwayEnv() {
+    if (!railwayEnvText.trim()) {
+      toast.error("Paste your backend .env contents or choose a file first.");
+      return;
+    }
+    setPushingRailwayEnv(true);
+    try {
+      const res = await api.post<{ keys: string[]; count: number }>(
+        `/migrations/${migrationId}/railway-env`,
+        { env: railwayEnvText },
+      );
+      setPushedRailwayEnvKeys(res.keys);
+      setRailwayEnvText("");
+      toast.success(
+        `Pushed ${res.count} variable${res.count === 1 ? "" : "s"} to Railway.`,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(msg);
+    } finally {
+      setPushingRailwayEnv(false);
+    }
+  }
+
+  function handleRailwayEnvFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setRailwayEnvText(
+        typeof reader.result === "string" ? reader.result : "",
+      );
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   }
 
   async function handleDeploy() {
@@ -370,10 +786,10 @@ export default function MigrationView() {
                 {migration.committed_secrets.length === 1 ? "" : "s"} that
                 appear to contain credentials. These are{" "}
                 <strong>excluded from AI analysis</strong> and will be{" "}
-                <strong>stripped from the migrated repository</strong> (and added
-                to <code>.gitignore</code>) so secrets aren&rsquo;t republished.
-                Because they were committed to your source repo, you should
-                consider these secrets exposed and{" "}
+                <strong>stripped from the migrated repository</strong> (and
+                added to <code>.gitignore</code>) so secrets aren&rsquo;t
+                republished. Because they were committed to your source repo,
+                you should consider these secrets exposed and{" "}
                 <strong>rotate them</strong>.
               </p>
               <p className="text-muted-foreground mt-2 font-mono text-xs break-all">
@@ -404,6 +820,155 @@ export default function MigrationView() {
           </div>
         </div>
       )}
+
+      {(isCompleted || isReviewed || deployed) && (
+        <div className="mb-6">
+          <BreakEvenCalculator
+            migrationCostCents={migration.estimated_cost_cents}
+            platform={migration.detected_platform}
+            monthlySpend={monthlySpend}
+            setMonthlySpend={setMonthlySpend}
+            claudeSpend={claudeSpend}
+            setClaudeSpend={setClaudeSpend}
+          />
+        </div>
+      )}
+
+      {(isCompleted || isReviewed) && migration.addon_data_migration && (
+        <Card className="mb-6">
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Database className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">
+                    {migration.has_db_url
+                      ? "Database Tables"
+                      : "Create Tables in Supabase"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {schemaApplied
+                      ? "Schema applied to your Supabase project."
+                      : migration.has_db_url
+                        ? "We applied your schema automatically using your saved connection string — check the log for the result, or re-apply below."
+                        : "Add your Supabase connection string and we'll create the tables for you with one click."}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant={
+                  schemaApplied || migration.has_db_url ? "outline" : "default"
+                }
+                size="sm"
+                onClick={() => setSchemaDialogOpen(true)}
+              >
+                {schemaApplied ? (
+                  <>
+                    <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
+                    Applied
+                  </>
+                ) : (
+                  <>
+                    <Database className="mr-2 h-3.5 w-3.5" />
+                    {migration.has_db_url ? "Re-apply" : "Apply Schema"}
+                  </>
+                )}
+              </Button>
+            </div>
+            {!schemaApplied && (
+              <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
+                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <p className="leading-relaxed">
+                  <strong>
+                    Your app won&apos;t work until these tables are created.
+                  </strong>{" "}
+                  Click <strong>Apply Schema</strong> above and paste your
+                  Supabase connection string — we&apos;ll set everything up
+                  automatically. This is a required step.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={schemaDialogOpen} onOpenChange={setSchemaDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Apply schema to Supabase</DialogTitle>
+            <DialogDescription>
+              This runs the AI-generated SQL against your Supabase database and
+              creates the tables, policies, and indexes. It executes DDL
+              directly on your database — review the generated{" "}
+              <code className="text-[11px]">
+                supabase/migrations/001_initial_schema.sql
+              </code>{" "}
+              first.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <label className="block">
+              <span className="text-sm font-medium">
+                Supabase connection string
+              </span>
+              <Input
+                type="password"
+                autoComplete="off"
+                placeholder="postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres"
+                value={dbConnString}
+                onChange={(e) => setDbConnString(e.target.value)}
+                className="mt-1 font-mono text-xs"
+              />
+              <span className="text-[11px] text-muted-foreground mt-1 block leading-relaxed">
+                {migration.has_db_url
+                  ? "Leave blank to reuse your saved connection string, or paste a new one to override it. "
+                  : ""}
+                Supabase Dashboard → Project Settings → Database → Connection
+                string (use the <strong>Session</strong> / direct string, port
+                5432). It contains your DB password — we send it over TLS, use
+                it once, and only store it if you check the box below.
+              </span>
+            </label>
+
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={rememberDbConn}
+                onChange={(e) => setRememberDbConn(e.target.checked)}
+                className="h-4 w-4 rounded border-border"
+              />
+              Remember this connection string (encrypted) for re-applies
+            </label>
+
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
+              <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                Best run against a fresh/empty Supabase project. If a table
+                already exists, the run is rolled back and nothing is changed.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSchemaDialogOpen(false)}
+              disabled={applyingSchema}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleApplySchema} disabled={applyingSchema}>
+              {applyingSchema ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Database className="mr-2 h-4 w-4" />
+              )}
+              {applyingSchema ? "Applying..." : "Apply Schema"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Analysis results / cost estimate */}
       {(isEstimated || migration.detected_platform) && (
@@ -454,6 +1019,15 @@ export default function MigrationView() {
               </div>
             </div>
 
+            {migration.backend_type && (
+              <div className="mb-4">
+                <BackendBanner
+                  type={migration.backend_type}
+                  details={migration.backend_details}
+                />
+              </div>
+            )}
+
             {migration.analysis_input_tokens +
               migration.analysis_output_tokens >
               0 &&
@@ -478,10 +1052,14 @@ export default function MigrationView() {
 
             {isEstimated &&
               (() => {
-                const addonCents =
-                  (addonDataMigration ? 2500 : 0) +
-                  (addonCodeReview ? 7500 : 0);
+                const addonCents = addonCodeReview ? 7500 : 0;
                 const totalCents = migration.estimated_cost_cents + addonCents;
+                const effectiveUrl =
+                  supabaseUrl ?? migration.supabase_url ?? "";
+                const effectiveKey =
+                  supabaseKey ?? migration.supabase_anon_key ?? "";
+                const credsReady =
+                  effectiveUrl.trim() !== "" && effectiveKey.trim() !== "";
                 return (
                   <>
                     <Separator className="my-4" />
@@ -493,11 +1071,11 @@ export default function MigrationView() {
                           ${(totalCents / 100).toFixed(2)}
                         </p>
                         <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
-                          <p>$20.00 base fee</p>
+                          <p>$35.00 base fee (incl. database schema)</p>
                           <p>
                             $
                             {(
-                              (migration.estimated_cost_cents - 2000) /
+                              (migration.estimated_cost_cents - 3500) /
                               100
                             ).toFixed(2)}{" "}
                             token usage (~
@@ -507,64 +1085,25 @@ export default function MigrationView() {
                             ).toLocaleString()}{" "}
                             tokens)
                           </p>
-                          {addonDataMigration && <p>$25.00 data migration</p>}
                           {addonCodeReview && <p>$75.00 code review</p>}
                         </div>
                       </div>
                     </div>
 
+                    <BreakEvenCalculator
+                      migrationCostCents={totalCents}
+                      platform={migration.detected_platform}
+                      monthlySpend={monthlySpend}
+                      setMonthlySpend={setMonthlySpend}
+                      claudeSpend={claudeSpend}
+                      setClaudeSpend={setClaudeSpend}
+                    />
+
                     <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
                       <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Optional Add-ons
                       </p>
-                      <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={addonDataMigration}
-                          onChange={(e) =>
-                            setAddonDataMigration(e.target.checked)
-                          }
-                          className="mt-0.5 h-4 w-4 rounded border-border"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium flex items-center gap-1.5">
-                              <Database className="h-3.5 w-3.5" />
-                              Data Migration
-                            </span>
-                            <span className="text-sm font-semibold">+$25</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                            AI reads your source code to reverse-engineer the
-                            database schema your app depends on, then generates
-                            a ready-to-run Supabase SQL migration file
-                            including:
-                          </p>
-                          <ul className="text-xs text-muted-foreground mt-1.5 space-y-0.5 list-disc list-inside">
-                            <li>
-                              CREATE TABLE statements with proper PostgreSQL
-                              types and constraints
-                            </li>
-                            <li>
-                              Foreign key relationships and indexes based on
-                              detected query patterns
-                            </li>
-                            <li>
-                              Row Level Security (RLS) policies matched to your
-                              auth flow
-                            </li>
-                          </ul>
-                          <p className="text-xs text-muted-foreground mt-1.5">
-                            The output lands in{" "}
-                            <code className="bg-muted px-1 rounded text-[11px]">
-                              supabase/migrations/001_initial_schema.sql
-                            </code>{" "}
-                            and can be applied directly via the Supabase SQL
-                            editor or CLI.
-                          </p>
-                        </div>
-                      </label>
-                      <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-background hover:bg-muted/50 transition-colors">
+                      <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-white hover:bg-muted/50 transition-colors">
                         <input
                           type="checkbox"
                           checked={addonCodeReview}
@@ -620,11 +1159,91 @@ export default function MigrationView() {
                       </label>
                     </div>
 
+                    <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
+                      <div>
+                        <p className="text-sm font-medium">
+                          Connect your Supabase project
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Required to run the migration. Find both under{" "}
+                          <a
+                            href="https://supabase.com/dashboard/project/_/settings/api"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline"
+                          >
+                            Project Settings &rarr; API
+                          </a>
+                          . The anon key is public and safe to embed.
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="estimate-supabase-url">
+                          Supabase URL
+                        </Label>
+                        <Input
+                          className="bg-white"
+                          id="estimate-supabase-url"
+                          placeholder="https://abcdefghijkl.supabase.co"
+                          value={effectiveUrl}
+                          onChange={(e) => setSupabaseUrl(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="estimate-supabase-key">Anon Key</Label>
+                        <Input
+                          className="bg-white"
+                          id="estimate-supabase-key"
+                          placeholder="eyJhbGciOiJIUzI1NiIs..."
+                          value={effectiveKey}
+                          onChange={(e) => setSupabaseKey(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="estimate-supabase-conn">
+                          Database connection string{" "}
+                          <span className="font-normal text-muted-foreground">
+                            (optional)
+                          </span>
+                        </Label>
+                        <Input
+                          id="estimate-supabase-conn"
+                          type="password"
+                          autoComplete="off"
+                          placeholder="postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres"
+                          value={dbConnString}
+                          onChange={(e) => setDbConnString(e.target.value)}
+                          className="font-mono text-xs bg-white"
+                        />
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          Provide this and we&apos;ll{" "}
+                          <strong>create your tables automatically</strong> when
+                          the migration finishes. Find it under Project Settings
+                          &rarr; Database (use the <strong>Session</strong>{" "}
+                          string, port 5432). Stored encrypted.
+                        </p>
+                        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
+                          <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          <p className="leading-relaxed">
+                            <strong>
+                              Your tables must be created for the app to work.
+                            </strong>{" "}
+                            Easiest is to add the connection string now and
+                            we&apos;ll set everything up for you. If you skip
+                            it, you can add it on the next screen after the
+                            migration and we&apos;ll create the tables with one
+                            click &mdash; but the app won&apos;t run until
+                            that&apos;s done.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex justify-end">
                       <Button
                         size="lg"
                         onClick={handlePayAndStart}
-                        disabled={paying}
+                        disabled={paying || !credsReady}
                       >
                         {paying ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -633,7 +1252,9 @@ export default function MigrationView() {
                         )}
                         {paying
                           ? "Redirecting..."
-                          : `Pay $${(totalCents / 100).toFixed(2)} & Start`}
+                          : credsReady
+                            ? `Pay $${(totalCents / 100).toFixed(2)} & Start`
+                            : "Enter Supabase details to continue"}
                       </Button>
                     </div>
 
@@ -975,9 +1596,7 @@ export default function MigrationView() {
 
             <Button
               onClick={handlePush}
-              disabled={
-                pushing || (pushType === "new" && !repoName.trim())
-              }
+              disabled={pushing || (pushType === "new" && !repoName.trim())}
             >
               {pushing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1044,6 +1663,266 @@ export default function MigrationView() {
                   {deploying ? "Redeploying..." : "Redeploy"}
                 </Button>
               </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Environment variable transfer */}
+      {deployed &&
+        (() => {
+          const previewKeys = previewEnvKeys(envText);
+          return (
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <KeyRound className="h-5 w-5 text-muted-foreground" />
+                  Environment Variables
+                </CardTitle>
+                <CardDescription>
+                  Paste your <code className="text-xs">.env</code> (or choose a
+                  file) to push every variable to Vercel at once. Values are sent
+                  straight to Vercel and are never stored by Yougrate.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <textarea
+                  value={envText}
+                  onChange={(e) => setEnvText(e.target.value)}
+                  placeholder={
+                    "API_KEY=sk-...\nDATABASE_URL=postgres://...\nNEXT_PUBLIC_FOO=bar"
+                  }
+                  spellCheck={false}
+                  className="w-full min-h-[140px] rounded-md border border-input bg-white px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex">
+                    <input
+                      type="file"
+                      accept=".env,.txt,text/plain"
+                      onChange={handleEnvFile}
+                      className="hidden"
+                    />
+                    <span className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium cursor-pointer hover:bg-accent">
+                      <Upload className="h-3.5 w-3.5" />
+                      Choose .env file
+                    </span>
+                  </label>
+                  <Button
+                    size="sm"
+                    onClick={handlePushEnv}
+                    disabled={pushingEnv || previewKeys.length === 0}
+                  >
+                    {pushingEnv ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Rocket className="mr-2 h-4 w-4" />
+                    )}
+                    {pushingEnv
+                      ? "Pushing..."
+                      : previewKeys.length > 0
+                        ? `Push ${previewKeys.length} variable${previewKeys.length === 1 ? "" : "s"} to Vercel`
+                        : "Push to Vercel"}
+                  </Button>
+                </div>
+
+                {previewKeys.length > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    <span className="font-medium">Detected keys:</span>{" "}
+                    <span className="font-mono">{previewKeys.join(", ")}</span>
+                  </div>
+                )}
+
+                {pushedEnvKeys && pushedEnvKeys.length > 0 && (
+                  <div className="flex items-start gap-2 rounded-md border border-green-300 bg-green-50 p-2.5 text-xs text-green-800">
+                    <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <p className="leading-relaxed">
+                      Pushed to Vercel:{" "}
+                      <span className="font-mono">
+                        {pushedEnvKeys.join(", ")}
+                      </span>
+                      . Redeploy for the new values to take effect.
+                    </p>
+                  </div>
+                )}
+
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Stored on Vercel as &ldquo;sensitive&rdquo; variables (they
+                  can&apos;t be read back out). Existing keys with the same name
+                  are overwritten.
+                </p>
+              </CardContent>
+            </Card>
+          );
+        })()}
+
+      {/* Backend server -> Railway */}
+      {migration.backend_type === "server" && migration.output_repo_url && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Server className="h-5 w-5 text-muted-foreground" />
+              Backend Server (Railway)
+            </CardTitle>
+            <CardDescription>
+              This app needs a long-running server, which Vercel can&apos;t host.
+              Deploy it to Railway
+              {migration.backend_details?.server_dir &&
+              migration.backend_details.server_dir !== "."
+                ? ` from ${migration.backend_details.server_dir}/`
+                : ""}
+              .
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {!profile?.railway_connected ? (
+              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <p className="leading-relaxed">
+                  Connect your Railway account in{" "}
+                  <Link to="/settings" className="underline font-medium">
+                    Settings
+                  </Link>{" "}
+                  to deploy the backend. You&apos;ll also need to authorize
+                  Railway&apos;s GitHub app on this repo.
+                </p>
+              </div>
+            ) : !migration.railway_service_id ? (
+              <>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  We&apos;ll create a Railway project, connect this repo
+                  {migration.backend_details?.start_command ? (
+                    <>
+                      , set the start command (
+                      <code className="font-mono">
+                        {migration.backend_details.start_command}
+                      </code>
+                      )
+                    </>
+                  ) : null}
+                  , generate a public URL, and wire it into your Vercel frontend.
+                </p>
+                {railwayGithubHelp && (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+                    <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                    <p className="leading-relaxed">
+                      Railway can&apos;t access this repo yet. Authorize the{" "}
+                      <a
+                        href={railwayGithubHelp}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline font-medium inline-flex items-center gap-1"
+                      >
+                        Railway GitHub app
+                        <ExternalLink className="h-3 w-3" />
+                      </a>{" "}
+                      on this repository, then retry.
+                    </p>
+                  </div>
+                )}
+                <Button onClick={handleDeployRailway} disabled={deployingRailway}>
+                  {deployingRailway ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Server className="mr-2 h-4 w-4" />
+                  )}
+                  {deployingRailway
+                    ? "Deploying..."
+                    : "Deploy backend to Railway"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 text-sm text-green-600">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span className="font-medium">Backend deployed to Railway</span>
+                </div>
+                {migration.railway_service_domain && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Backend URL</p>
+                    <a
+                      href={`https://${migration.railway_service_domain}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-primary hover:underline font-mono"
+                    >
+                      https://{migration.railway_service_domain}
+                    </a>
+                  </div>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDeployRailway}
+                  disabled={deployingRailway}
+                >
+                  {deployingRailway ? (
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Server className="mr-2 h-3 w-3" />
+                  )}
+                  {deployingRailway ? "Redeploying..." : "Redeploy"}
+                </Button>
+
+                <Separator />
+
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">
+                    Backend environment variables
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Paste your server&apos;s <code className="text-xs">.env</code>{" "}
+                    to push it to the Railway service. Values go straight to
+                    Railway and are never stored by Yougrate.
+                  </p>
+                  <textarea
+                    value={railwayEnvText}
+                    onChange={(e) => setRailwayEnvText(e.target.value)}
+                    placeholder={"DATABASE_URL=postgres://...\nJWT_SECRET=..."}
+                    spellCheck={false}
+                    className="w-full min-h-[120px] rounded-md border border-input bg-white px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex">
+                      <input
+                        type="file"
+                        accept=".env,.txt,text/plain"
+                        onChange={handleRailwayEnvFile}
+                        className="hidden"
+                      />
+                      <span className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium cursor-pointer hover:bg-accent">
+                        <Upload className="h-3.5 w-3.5" />
+                        Choose .env file
+                      </span>
+                    </label>
+                    <Button
+                      size="sm"
+                      onClick={handlePushRailwayEnv}
+                      disabled={pushingRailwayEnv || !railwayEnvText.trim()}
+                    >
+                      {pushingRailwayEnv ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Rocket className="mr-2 h-4 w-4" />
+                      )}
+                      {pushingRailwayEnv ? "Pushing..." : "Push to Railway"}
+                    </Button>
+                  </div>
+                  {pushedRailwayEnvKeys && pushedRailwayEnvKeys.length > 0 && (
+                    <div className="flex items-start gap-2 rounded-md border border-green-300 bg-green-50 p-2.5 text-xs text-green-800">
+                      <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <p className="leading-relaxed">
+                        Pushed to Railway:{" "}
+                        <span className="font-mono">
+                          {pushedRailwayEnvKeys.join(", ")}
+                        </span>
+                        . Railway will redeploy with the new values.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </CardContent>
         </Card>
@@ -1171,7 +2050,7 @@ export default function MigrationView() {
                       className={`flex items-start gap-3 p-3 rounded-md border transition-colors ${
                         postDeployChecks[item.id]
                           ? "bg-muted/30 border-border/50"
-                          : "bg-background border-border hover:bg-muted/30"
+                          : "bg-white border-border hover:bg-muted/30"
                       }`}
                     >
                       <input
@@ -1369,7 +2248,7 @@ export default function MigrationView() {
                 const reason = f.changes_summary?.reason;
                 return (
                   <div key={f.id} className="py-2.5">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 mr-1">
                       <Icon
                         className={`h-4 w-4 shrink-0 ${
                           f.status === "completed"

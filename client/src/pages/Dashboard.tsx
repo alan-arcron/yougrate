@@ -18,6 +18,8 @@ import {
   ArrowRight,
   Settings,
   CheckCircle2,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 import { GithubIcon } from "@/components/icons";
 
@@ -47,6 +49,28 @@ export default function Dashboard() {
   const [searchParams] = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  async function handleDeleteProject(project: Project) {
+    if (
+      !window.confirm(
+        `Delete project "${project.name}"? This permanently removes the project and all its migrations. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(project.id);
+    try {
+      await api.delete(`/projects/${project.id}`);
+      setProjects((prev) => prev.filter((p) => p.id !== project.id));
+      toast.success("Project deleted");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(msg);
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   useEffect(() => {
     api
@@ -309,7 +333,27 @@ export default function Dashboard() {
                         {p.detected_platform}
                       </Badge>
                     )}
-                    <ArrowRight className="h-4 w-4 text-muted-foreground ml-auto" />
+                    <div className="flex items-center gap-1 ml-auto">
+                      {profile?.is_admin && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          disabled={deletingId === p.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteProject(p);
+                          }}
+                        >
+                          {deletingId === p.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      )}
+                      <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                    </div>
                   </div>
                 </CardContent>
               </Card>

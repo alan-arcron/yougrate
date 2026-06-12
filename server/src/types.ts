@@ -44,6 +44,18 @@ export type SupabaseService =
   | "edge_functions"
   | "realtime";
 
+export type BackendType = "supabase_only" | "edge_functions" | "server";
+
+export interface BackendDetails {
+  reason?: string;
+  // Directory containing the long-running server (for backend_type "server").
+  server_dir?: string;
+  // Best-guess start command parsed from package.json scripts.start.
+  start_command?: string;
+  // Names of serverless functions detected (for "edge_functions").
+  edge_functions?: string[];
+}
+
 export interface User {
   id: string;
   email: string;
@@ -52,6 +64,7 @@ export interface User {
   github_access_token: string | null;
   github_username: string | null;
   vercel_access_token: string | null;
+  railway_access_token: string | null;
   stripe_customer_id: string | null;
   free_analyses_used: number;
   free_analyses_limit: number;
@@ -69,6 +82,7 @@ export interface Project {
   detected_platform: DetectedPlatform | null;
   supabase_url: string | null;
   supabase_anon_key: string | null;
+  supabase_db_url: string | null;
   status: ProjectStatus;
   created_at: string;
   updated_at: string;
@@ -80,6 +94,13 @@ export interface Migration {
   status: MigrationStatus;
   detected_platform: DetectedPlatform | null;
   detected_services: SupabaseService[];
+  backend_type: BackendType | null;
+  backend_details: BackendDetails;
+  railway_project_id: string | null;
+  railway_service_id: string | null;
+  railway_environment_id: string | null;
+  railway_service_domain: string | null;
+  railway_deployment_id: string | null;
   total_files: number;
   files_to_migrate: number;
   files_migrated: number;

@@ -229,6 +229,41 @@ router.get("/users/:id/billing", async (req: AuthRequest, res: Response) => {
   res.json(events);
 });
 
+const resetAnalysesSchema = z.object({
+  limit: z.number().int().min(0).max(1000).optional(),
+}).strip();
+
+// Reset a user's free analysis usage back to zero (giving them their full free
+// allotment again). Optionally also set a new limit.
+router.post(
+  "/users/:id/reset-analyses",
+  validateBody(resetAnalysesSchema),
+  async (req: AuthRequest, res: Response) => {
+    const user = await db("users").where({ id: req.params.id }).first();
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const updates: Record<string, number | string> = {
+      free_analyses_used: 0,
+      updated_at: new Date().toISOString(),
+    };
+    if (typeof req.body.limit === "number") {
+      updates.free_analyses_limit = req.body.limit;
+    }
+
+    await db("users").where({ id: user.id }).update(updates);
+
+    const updated = await db("users").where({ id: user.id }).first();
+    res.json({
+      id: updated.id,
+      free_analyses_used: updated.free_analyses_used,
+      free_analyses_limit: updated.free_analyses_limit,
+    });
+  },
+);
+
 router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
   const migration = await db("migrations").where({ id: req.params.id }).first();
   if (!migration) {
@@ -261,6 +296,17 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
   );
   const apiCost = analysisCost + migrationCost;
 
+  // What the customer is charged: base fee + billed AI token usage (already
+  // included in estimated_cost_cents) + any add-ons. estimated_cost_cents from
+  // calculateCost() = token cost (with markup) + base fee.
+  const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "3500");
+  const addonCodeReviewCents = migration.addon_code_review
+    ? parseInt(process.env.ADDON_CODE_REVIEW_CENTS || "7500")
+    : 0;
+  const estimatedCostCents = migration.estimated_cost_cents || 0;
+  const tokenBilledCents = Math.max(0, estimatedCostCents - baseFeeCents);
+  const customerPriceCents = estimatedCostCents + addonCodeReviewCents;
+
   res.json({
     ...migration,
     project_name: project?.name || null,
@@ -270,6 +316,12 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
     raw_cost_cents: apiCost,
     revenue_cents: revenueCents,
     margin_cents: revenueCents - apiCost,
+    customer_price: {
+      base_fee_cents: baseFeeCents,
+      token_billed_cents: tokenBilledCents,
+      addon_code_review_cents: addonCodeReviewCents,
+      total_cents: customerPriceCents,
+    },
     billing_events: billingEvents,
     files,
   });

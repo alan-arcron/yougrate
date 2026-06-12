@@ -42,20 +42,15 @@ export async function getOrCreateCustomer(
 }
 
 export interface CheckoutAddons {
-  dataMigration?: boolean;
   codeReview?: boolean;
 }
 
-const ADDON_DATA_MIGRATION_CENTS = parseInt(
-  process.env.ADDON_DATA_MIGRATION_CENTS || "2500",
-); // $25
 const ADDON_CODE_REVIEW_CENTS = parseInt(
   process.env.ADDON_CODE_REVIEW_CENTS || "7500",
 ); // $75
 
 export function addonTotalCents(addons?: CheckoutAddons): number {
   let total = 0;
-  if (addons?.dataMigration) total += ADDON_DATA_MIGRATION_CENTS;
   if (addons?.codeReview) total += ADDON_CODE_REVIEW_CENTS;
   return total;
 }
@@ -71,7 +66,7 @@ export async function createCheckoutForMigration(
   const s = getStripe();
   const customerId = await getOrCreateCustomer(userId, email);
 
-  const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "2000");
+  const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "3500");
   const tokenCostCents = Math.max(0, estimatedCostCents - baseFeeCents);
 
   //@ts-ignore
@@ -79,7 +74,11 @@ export async function createCheckoutForMigration(
     {
       price_data: {
         currency: "usd",
-        product_data: { name: "Migration base fee" },
+        product_data: {
+          name: "Migration base fee",
+          description:
+            "Code migration to Supabase + generated database schema (tables, RLS, indexes)",
+        },
         unit_amount: baseFeeCents,
       },
       quantity: 1,
@@ -94,21 +93,6 @@ export async function createCheckoutForMigration(
           name: `AI token usage (~${estimatedTokens.toLocaleString()} tokens)`,
         },
         unit_amount: tokenCostCents,
-      },
-      quantity: 1,
-    });
-  }
-
-  if (addons?.dataMigration) {
-    lineItems.push({
-      price_data: {
-        currency: "usd",
-        product_data: {
-          name: "Data migration (SQL schema generation)",
-          description:
-            "AI-generated Supabase SQL migrations, RLS policies & indexes from your source schema",
-        },
-        unit_amount: ADDON_DATA_MIGRATION_CENTS,
       },
       quantity: 1,
     });

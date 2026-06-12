@@ -20,8 +20,15 @@ import {
 import type { CheckoutAddons } from "../services/billing";
 import { calculateCost } from "../services/ai";
 import * as vercelService from "../services/vercel";
+import * as railwayService from "../services/railway";
 import * as githubService from "../services/github";
-import { decryptSecret } from "../utils/crypto";
+import * as s3 from "../services/s3";
+import {
+  validateSupabaseConnectionString,
+  readGeneratedSchema,
+  applySchema,
+} from "../services/schema-apply";
+import { decryptSecret, encryptSecret } from "../utils/crypto";
 import { redactSecrets } from "../utils/redact";
 
 const createMigrationSchema = z.object({
@@ -40,7 +47,45 @@ const retrySchema = z.object({
   model: z.string().max(100).optional(),
 }).strip();
 
+// .env payload is capped to avoid abuse; values are never persisted.
+const envSchema = z.object({
+  env: z.string().min(1).max(100_000),
+}).strip();
+
 const router = Router();
+
+/**
+ * Parse the contents of a .env file into key/value pairs, entirely in memory.
+ * Handles `export ` prefixes, `#` comments, blank lines, surrounding single or
+ * double quotes, and `=` characters inside values. Keys must match the standard
+ * env var grammar; anything else is ignored.
+ */
+function parseEnvText(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) line = line.slice("export ".length).trim();
+
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+
+    const key = line.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+
+    let value = line.slice(eq + 1).trim();
+    // Strip a single layer of matching surrounding quotes.
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+}
 
 
 async function checkAnalysisQuota(
@@ -152,11 +197,17 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     )
     .orderBy("file_path");
 
-  res.json({ ...migration, is_deployed: project.status === "deployed", files });
+  res.json({
+    ...migration,
+    is_deployed: project.status === "deployed",
+    supabase_url: project.supabase_url,
+    supabase_anon_key: project.supabase_anon_key,
+    has_db_url: !!project.supabase_db_url,
+    files,
+  });
 });
 
 const confirmSchema = z.object({
-  addon_data_migration: z.boolean().optional(),
   addon_code_review: z.boolean().optional(),
 }).strip();
 
@@ -183,12 +234,12 @@ router.post(
     }
 
     const addons: CheckoutAddons = {
-      dataMigration: req.body.addon_data_migration ?? false,
       codeReview: req.body.addon_code_review ?? false,
     };
 
     await db("migrations").where({ id: migration.id }).update({
-      addon_data_migration: addons.dataMigration,
+      // Schema/table generation is now standard (bundled into the base fee).
+      addon_data_migration: true,
       addon_code_review: addons.codeReview,
     });
 
@@ -441,6 +492,334 @@ router.post(
         .update({ status: "migrated" });
       res.status(500).json({ error: message });
     }
+  },
+);
+
+router.post(
+  "/:id/env",
+  requireAuth,
+  validateBody(envSchema),
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { project } = owned;
+
+    const user = await db("users").where({ id: req.userId }).first();
+    if (!user?.vercel_access_token) {
+      res.status(400).json({ error: "Vercel not connected" });
+      return;
+    }
+
+    const token = decryptSecret(user.vercel_access_token);
+
+    // The Vercel project must already exist (created during deploy) before we
+    // can attach env vars to it.
+    const vercelProject = await vercelService.getProject(token, project.name);
+    if (!vercelProject) {
+      res.status(400).json({
+        error:
+          "No Vercel project found yet. Deploy your app first, then add environment variables.",
+      });
+      return;
+    }
+
+    const vars = parseEnvText(req.body.env);
+    const count = Object.keys(vars).length;
+    if (count === 0) {
+      res
+        .status(400)
+        .json({ error: "No valid environment variables found in the input." });
+      return;
+    }
+
+    try {
+      const keys = await vercelService.upsertEnvVars(
+        token,
+        vercelProject.id || vercelProject.name,
+        vars,
+      );
+      res.json({ keys, count: keys.length });
+    } catch (err: unknown) {
+      const raw = err instanceof Error ? err.message : String(err);
+      let message = "Failed to push environment variables to Vercel.";
+      if (raw.includes("not_authorized") || raw.includes("403")) {
+        message =
+          "Vercel authorization failed. Please reconnect your Vercel account.";
+      }
+      // raw may echo the Vercel error body but never the submitted values.
+      console.error("[env] Error:", redactSecrets(raw));
+      res.status(500).json({ error: message });
+    }
+  },
+);
+
+router.post(
+  "/:id/deploy-railway",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration, project } = owned;
+
+    if (migration.backend_type !== "server") {
+      res.status(400).json({
+        error: "This migration doesn't need a persistent backend server.",
+      });
+      return;
+    }
+    if (!migration.output_repo_url) {
+      res
+        .status(400)
+        .json({ error: "Push your code to GitHub before deploying to Railway." });
+      return;
+    }
+
+    const user = await db("users").where({ id: req.userId }).first();
+    if (!user?.railway_access_token) {
+      res.status(400).json({ error: "Railway not connected" });
+      return;
+    }
+    const token = decryptSecret(user.railway_access_token);
+
+    const repo = migration.output_repo_url.replace(
+      "https://github.com/",
+      "",
+    );
+    const branch = migration.output_branch || "main";
+
+    // Guided GitHub check: Railway can only build a repo it has access to. If we
+    // can enumerate the linked account's repos and this one isn't there, tell
+    // the user to authorize Railway on GitHub instead of failing cryptically.
+    const accessible = await railwayService.getAccessibleRepos(token);
+    if (accessible && !accessible.includes(repo)) {
+      res.status(400).json({
+        error:
+          "Railway can't access this repository yet. Connect Railway to your GitHub account and grant it access to this repo, then try again.",
+        needs_github_connect: true,
+        github_app_url: "https://github.com/apps/railway/installations/new",
+      });
+      return;
+    }
+
+    const details =
+      (migration.backend_details as {
+        server_dir?: string;
+        start_command?: string;
+      } | null) || {};
+    const rootDirectory =
+      details.server_dir && details.server_dir !== "."
+        ? details.server_dir
+        : undefined;
+
+    try {
+      const serviceName = `${project.name}-api`
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .slice(0, 60);
+
+      const { projectId, environmentId } = await railwayService.createProject(
+        token,
+        serviceName,
+      );
+      const serviceId = await railwayService.createService(
+        token,
+        projectId,
+        serviceName,
+      );
+      await railwayService.connectRepo(token, serviceId, repo, branch);
+      await railwayService.configureService(token, serviceId, environmentId, {
+        rootDirectory,
+        startCommand: details.start_command,
+      });
+
+      let domain: string | null = null;
+      try {
+        domain = await railwayService.createServiceDomain(
+          token,
+          environmentId,
+          serviceId,
+        );
+      } catch (e) {
+        console.error(
+          "[railway] domain create failed:",
+          redactSecrets(e instanceof Error ? e.message : String(e)),
+        );
+      }
+
+      const deploymentId = await railwayService.deployService(
+        token,
+        serviceId,
+        environmentId,
+      );
+
+      await db("migrations").where({ id: migration.id }).update({
+        railway_project_id: projectId,
+        railway_service_id: serviceId,
+        railway_environment_id: environmentId,
+        railway_service_domain: domain,
+        railway_deployment_id: deploymentId,
+        updated_at: new Date().toISOString(),
+      });
+
+      // Best-effort: expose the backend URL to the Vercel frontend so it can
+      // reach the API without the user wiring it up manually.
+      let apiUrlWired = false;
+      const apiUrl = domain ? `https://${domain}` : null;
+      if (apiUrl && user.vercel_access_token) {
+        try {
+          const vercelToken = decryptSecret(user.vercel_access_token);
+          const vercelProject = await vercelService.getProject(
+            vercelToken,
+            project.name,
+          );
+          if (vercelProject) {
+            await vercelService.upsertEnvVars(
+              vercelToken,
+              vercelProject.id || vercelProject.name,
+              {
+                VITE_API_URL: apiUrl,
+                NEXT_PUBLIC_API_URL: apiUrl,
+              },
+            );
+            apiUrlWired = true;
+          }
+        } catch (e) {
+          console.error(
+            "[railway] wiring API URL into Vercel failed:",
+            redactSecrets(e instanceof Error ? e.message : String(e)),
+          );
+        }
+      }
+
+      res.json({
+        project_id: projectId,
+        service_id: serviceId,
+        environment_id: environmentId,
+        domain,
+        api_url: apiUrl,
+        api_url_wired: apiUrlWired,
+        deployment_id: deploymentId,
+      });
+    } catch (err: unknown) {
+      const raw = err instanceof Error ? err.message : String(err);
+      let message = "Failed to deploy backend to Railway.";
+      const low = raw.toLowerCase();
+      if (low.includes("not authorized") || low.includes("unauthorized")) {
+        message =
+          "Railway authorization failed. Reconnect your Railway account in Settings.";
+      } else if (low.includes("repo") || low.includes("github")) {
+        message =
+          "Railway couldn't access the repository. Make sure Railway is connected to GitHub with access to this repo.";
+      }
+      console.error("[railway] deploy error:", redactSecrets(raw));
+      res.status(500).json({ error: message });
+    }
+  },
+);
+
+router.post(
+  "/:id/railway-env",
+  requireAuth,
+  validateBody(envSchema),
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration } = owned;
+
+    if (
+      !migration.railway_service_id ||
+      !migration.railway_environment_id ||
+      !migration.railway_project_id
+    ) {
+      res
+        .status(400)
+        .json({ error: "Deploy the backend to Railway first." });
+      return;
+    }
+
+    const user = await db("users").where({ id: req.userId }).first();
+    if (!user?.railway_access_token) {
+      res.status(400).json({ error: "Railway not connected" });
+      return;
+    }
+
+    const vars = parseEnvText(req.body.env);
+    if (Object.keys(vars).length === 0) {
+      res
+        .status(400)
+        .json({ error: "No valid environment variables found in the input." });
+      return;
+    }
+
+    try {
+      const keys = await railwayService.setVariables(
+        decryptSecret(user.railway_access_token),
+        {
+          projectId: migration.railway_project_id,
+          environmentId: migration.railway_environment_id,
+          serviceId: migration.railway_service_id,
+        },
+        vars,
+      );
+      res.json({ keys, count: keys.length });
+    } catch (err: unknown) {
+      const raw = err instanceof Error ? err.message : String(err);
+      console.error("[railway-env] Error:", redactSecrets(raw));
+      res
+        .status(500)
+        .json({ error: "Failed to push environment variables to Railway." });
+    }
+  },
+);
+
+router.get(
+  "/:id/railway-status",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration } = owned;
+
+    if (
+      !migration.railway_service_id ||
+      !migration.railway_environment_id ||
+      !migration.railway_project_id
+    ) {
+      res.json({ deployed: false, status: null });
+      return;
+    }
+
+    const user = await db("users").where({ id: req.userId }).first();
+    if (!user?.railway_access_token) {
+      res.json({ deployed: true, status: null });
+      return;
+    }
+
+    const result = await railwayService.getLatestDeploymentStatus(
+      decryptSecret(user.railway_access_token),
+      {
+        projectId: migration.railway_project_id,
+        environmentId: migration.railway_environment_id,
+        serviceId: migration.railway_service_id,
+      },
+    );
+    res.json({
+      deployed: true,
+      status: result?.status ?? null,
+      domain: migration.railway_service_domain,
+    });
   },
 );
 
@@ -723,6 +1102,85 @@ router.post(
     );
 
     res.json({ checkout_url: checkoutUrl });
+  },
+);
+
+const applySchemaSchema = z
+  .object({
+    connection_string: z.string().min(1).max(1000).optional(),
+    save: z.boolean().optional(),
+  })
+  .strip();
+
+router.post(
+  "/:id/apply-schema",
+  requireAuth,
+  validateBody(applySchemaSchema),
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration, project } = owned;
+
+    if (!migration.addon_data_migration) {
+      res.status(400).json({
+        error:
+          "No generated schema for this migration — the data migration add-on was not used.",
+      });
+      return;
+    }
+    if (!["completed", "reviewed"].includes(migration.status)) {
+      res
+        .status(400)
+        .json({ error: "Migration must be completed before applying the schema" });
+      return;
+    }
+
+    // Prefer a connection string supplied now; otherwise reuse the stored one.
+    const supplied = req.body.connection_string?.trim();
+    const connectionString = supplied || decryptSecret(project.supabase_db_url);
+    if (!connectionString) {
+      res
+        .status(400)
+        .json({ error: "Provide your Supabase database connection string." });
+      return;
+    }
+
+    const valid = validateSupabaseConnectionString(connectionString);
+    if (!valid.ok) {
+      res.status(400).json({ error: valid.error });
+      return;
+    }
+
+    const s3Prefix = s3.getWorkspacePrefix(project.id, migration.id);
+    const sql = await readGeneratedSchema(s3Prefix);
+    if (!sql) {
+      res.status(400).json({
+        error:
+          "Generated schema file not found. Re-run the migration with the data migration add-on.",
+      });
+      return;
+    }
+
+    const result = await applySchema(connectionString, sql);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    // Persist the connection string (encrypted) only if the user opted in.
+    if (supplied && req.body.save) {
+      await db("projects")
+        .where({ id: project.id })
+        .update({
+          supabase_db_url: encryptSecret(connectionString),
+          updated_at: new Date().toISOString(),
+        });
+    }
+
+    res.json({ ok: true });
   },
 );
 

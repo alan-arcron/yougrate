@@ -15,7 +15,7 @@ export default function Privacy() {
 
         <h1 className="text-3xl font-bold mb-2">Privacy Policy</h1>
         <p className="text-sm text-muted-foreground mb-10">
-          Last updated: May 21, 2026
+          Last updated: June 11, 2026
         </p>
 
         <div className="prose prose-sm dark:prose-invert max-w-none space-y-8">
@@ -52,7 +52,10 @@ export default function Privacy() {
               <li>
                 <strong>Supabase configuration:</strong> Your Supabase project
                 URL and anonymous key, used to configure environment variables
-                in your deployed application.
+                in your deployed application. Optionally, a database connection
+                string (which includes your database password) that you provide
+                so we can create your tables &mdash; this is encrypted before
+                storage and only used to apply your generated schema.
               </li>
               <li>
                 <strong>Source code:</strong> Your repository files are read
@@ -159,7 +162,8 @@ export default function Privacy() {
                 retained long-term after migration completion.
               </li>
               <li>
-                <strong>OAuth tokens:</strong> GitHub and Vercel access tokens
+                <strong>Connected credentials:</strong> GitHub and Vercel access
+                tokens and your Supabase database connection string (if provided)
                 are encrypted at the application layer (AES-256-GCM) before being
                 stored, on top of the database's own encryption-at-rest, and are
                 never returned to the browser.

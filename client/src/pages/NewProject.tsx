@@ -4,7 +4,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Card,
   CardContent,
@@ -12,7 +11,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Search, Lock, Globe, Info, AlertCircle } from "lucide-react";
+import {
+  Search,
+  Lock,
+  Globe,
+  AlertCircle,
+  CheckCircle2,
+  CreditCard,
+  Loader2,
+  Info,
+} from "lucide-react";
 import { GithubIcon } from "@/components/icons";
 import { toast } from "sonner";
 
@@ -35,10 +43,27 @@ export default function NewProject() {
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
 
-  const [supabaseUrl, setSupabaseUrl] = useState("");
-  const [supabaseKey, setSupabaseKey] = useState("");
   const [selectedRepo, setSelectedRepo] = useState<GithubRepo | null>(null);
   const [tokenExpired, setTokenExpired] = useState(false);
+  const [quota, setQuota] = useState<{
+    used: number;
+    limit: number | null;
+    remaining: number | null;
+    needs_payment: boolean;
+  } | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<{
+        used: number;
+        limit: number | null;
+        remaining: number | null;
+        needs_payment: boolean;
+      }>("/billing/analysis-quota")
+      .then(setQuota)
+      .catch(() => setQuota(null));
+  }, []);
 
   useEffect(() => {
     if (!profile?.github_connected) return;
@@ -74,24 +99,50 @@ export default function NewProject() {
         default_branch: selectedRepo.default_branch,
       });
 
-      if (supabaseUrl && supabaseKey) {
-        await api.patch(`/projects/${project.id}/supabase`, {
-          supabase_url: supabaseUrl,
-          supabase_anon_key: supabaseKey,
-        });
-      }
-
       const migration = await api.post<{ id: string }>("/migrations", {
         project_id: project.id,
       });
 
       navigate(`/project/${project.id}/migration/${migration.id}`);
     } catch (err) {
-      console.error(err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.includes("free analyses") ||
+        msg.toLowerCase().includes("quota")
+      ) {
+        setQuota((q) =>
+          q
+            ? { ...q, needs_payment: true, remaining: 0 }
+            : { used: 2, limit: 2, remaining: 0, needs_payment: true },
+        );
+        toast.error("You've used all your free analyses.");
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setCreating(false);
     }
   }
+
+  async function handleUnlock() {
+    setUnlocking(true);
+    try {
+      const { checkout_url } = await api.post<{ checkout_url: string }>(
+        "/billing/unlock-analyses",
+      );
+      window.location.href = checkout_url;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(msg);
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
+  // Admins get Infinity, which serializes to null over JSON — only show the
+  // counter for users with a real finite limit.
+  const hasFiniteQuota = quota != null && typeof quota.limit === "number";
+  const outOfAnalyses = hasFiniteQuota && quota!.needs_payment;
 
   if (!profile?.github_connected) {
     return (
@@ -125,39 +176,63 @@ export default function NewProject() {
   return (
     <div className="max-w-3xl mx-auto px-6 py-10">
       <h1 className="text-3xl font-bold mb-2">New Migration</h1>
-      <p className="text-muted-foreground mb-8">
-        Select a repository and configure your Supabase project
+      <p className="text-muted-foreground mb-6">
+        Select a repository to analyze. You&apos;ll add your Supabase project
+        after reviewing the estimate.
       </p>
 
-      {/* Step 1: Select repo */}
+      {hasFiniteQuota && !outOfAnalyses && (
+        <div className="mb-6 flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          <Info className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+          <p className="text-muted-foreground">
+            Analyses are free to preview the cost estimate. You have{" "}
+            <span className="font-medium text-foreground">
+              {quota!.remaining} of {quota!.limit}
+            </span>{" "}
+            free analyses left. After that, it&apos;s $10 to cover prior usage
+            and unlock 2 more.
+          </p>
+        </div>
+      )}
+
+      {outOfAnalyses && (
+        <Card className="mb-6 border-amber-500/50">
+          <CardContent className="py-5">
+            <div className="flex items-start gap-3">
+              <Lock className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium">Analysis limit reached</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  You&apos;ve used all {quota!.limit} of your free analyses. Pay
+                  $10 to cover previous usage and unlock 2 more.
+                </p>
+                <Button
+                  size="sm"
+                  className="mt-3"
+                  onClick={handleUnlock}
+                  disabled={unlocking}
+                >
+                  {unlocking ? (
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                  ) : (
+                    <CreditCard className="mr-2 h-3 w-3" />
+                  )}
+                  {unlocking ? "Redirecting..." : "Unlock Analyses — $10"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Select repo */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle className="text-lg">1. Select Repository</CardTitle>
+          <CardTitle className="text-lg">Select Repository</CardTitle>
           <CardDescription>Choose the repo you want to migrate</CardDescription>
         </CardHeader>
         <CardContent>
-          {selectedRepo ? (
-            <div className="flex items-center justify-between bg-muted rounded-lg p-4">
-              <div className="flex items-center gap-3">
-                <GithubIcon className="h-5 w-5" />
-                <div>
-                  <p className="font-medium text-sm">
-                    {selectedRepo.full_name}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {selectedRepo.language} · {selectedRepo.default_branch}
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSelectedRepo(null)}
-              >
-                Change
-              </Button>
-            </div>
-          ) : tokenExpired ? (
+          {tokenExpired ? (
             <div className="space-y-3">
               <div className="flex items-start gap-3 p-4 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800">
                 <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
@@ -201,28 +276,39 @@ export default function NewProject() {
                     No repositories found
                   </div>
                 ) : (
-                  filtered.map((repo) => (
-                    <button
-                      key={repo.id}
-                      onClick={() => setSelectedRepo(repo)}
-                      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted transition-colors"
-                    >
-                      {repo.private ? (
-                        <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
-                      ) : (
-                        <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium truncate">
-                          {repo.full_name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {repo.language || "Unknown"} · Updated{" "}
-                          {new Date(repo.updated_at!).toLocaleDateString()}
-                        </p>
-                      </div>
-                    </button>
-                  ))
+                  filtered.map((repo) => {
+                    const isSelected = selectedRepo?.id === repo.id;
+                    return (
+                      <button
+                        key={repo.id}
+                        onClick={() => setSelectedRepo(repo)}
+                        aria-pressed={isSelected}
+                        className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+                          isSelected
+                            ? "bg-primary/10 border-l-2 border-primary"
+                            : "hover:bg-muted"
+                        }`}
+                      >
+                        {repo.private ? (
+                          <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
+                        ) : (
+                          <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">
+                            {repo.full_name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {repo.language || "Unknown"} · Updated{" "}
+                            {new Date(repo.updated_at!).toLocaleDateString()}
+                          </p>
+                        </div>
+                        {isSelected && (
+                          <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -230,60 +316,9 @@ export default function NewProject() {
         </CardContent>
       </Card>
 
-      {/* Step 2: Supabase config */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-lg">2. Connect Supabase Project</CardTitle>
-          <CardDescription>
-            Enter your Supabase project credentials (can be done later)
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50 border border-border text-xs text-muted-foreground">
-            <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            <span>
-              Find both values in your{" "}
-              <a
-                href="https://supabase.com/dashboard/project/_/settings/api"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline"
-              >
-                Supabase dashboard
-              </a>
-              {" "}under <strong>Project Settings &rarr; API</strong>. The URL is listed as "Project URL" and the anon key is under "Project API keys" (the one labeled <code className="bg-muted px-1 rounded">anon</code> / <code className="bg-muted px-1 rounded">public</code>).
-            </span>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="supabase-url">Supabase URL</Label>
-            <Input
-              id="supabase-url"
-              placeholder="https://abcdefghijkl.supabase.co"
-              value={supabaseUrl}
-              onChange={(e) => setSupabaseUrl(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Looks like <code className="bg-muted px-1 rounded">https://&lt;project-id&gt;.supabase.co</code>
-            </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="supabase-key">Anon Key</Label>
-            <Input
-              id="supabase-key"
-              placeholder="eyJhbGciOiJIUzI1NiIs..."
-              value={supabaseKey}
-              onChange={(e) => setSupabaseKey(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              The public <code className="bg-muted px-1 rounded">anon</code> key — safe to embed in client-side code
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
       <Button
         onClick={handleCreate}
-        disabled={!selectedRepo || creating}
+        disabled={!selectedRepo || creating || outOfAnalyses}
         size="lg"
         className="w-full"
       >

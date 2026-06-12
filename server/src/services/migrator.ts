@@ -13,12 +13,21 @@ import {
 import * as s3 from "./s3";
 import * as github from "./github";
 import * as vercel from "./vercel";
+import {
+  validateSupabaseConnectionString,
+  applySchema,
+} from "./schema-apply";
 import { decryptSecret } from "../utils/crypto";
 import { redactSecrets } from "../utils/redact";
 import { safeJoin } from "../utils/paths";
 import fs from "fs/promises";
 import path from "path";
-import type { Migration, MigrationLogEntry, SupabaseService } from "../types";
+import type {
+  Migration,
+  MigrationLogEntry,
+  SupabaseService,
+  BackendDetails,
+} from "../types";
 
 function friendlyError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
@@ -327,6 +336,10 @@ export async function runAnalysis(
       migrationId,
       `Services to migrate: ${analysis.services.join(", ") || "none detected"}`,
     );
+    await log(
+      migrationId,
+      `Backend architecture: ${analysis.backendType} — ${analysis.backendDetails.reason || ""}`,
+    );
 
     if (analysis.filesToMigrate.length > 0) {
       await log(
@@ -441,6 +454,10 @@ export async function runAnalysis(
       detected_services: JSON.stringify(
         analysis.services,
       ) as unknown as SupabaseService[],
+      backend_type: analysis.backendType,
+      backend_details: JSON.stringify(
+        analysis.backendDetails,
+      ) as unknown as BackendDetails,
       total_files: allFiles.length,
       files_to_migrate: filesToMigrate.length,
       analysis_input_tokens: analysisInput,
@@ -658,8 +675,9 @@ export async function runMigration(migrationId: string): Promise<void> {
         await log(migrationId, `Generated scaffold: ${filePath}`);
       }
 
-      // Run data migration add-on if selected
-      if (migration.addon_data_migration) {
+      // Generate the Supabase database schema. This is standard for every
+      // migration (bundled into the base fee) so users always get their tables.
+      {
         await log(migrationId, "Generating Supabase SQL schema from source code...");
         try {
           const dbFiles = await db("migration_files")
@@ -687,6 +705,22 @@ export async function runMigration(migrationId: string): Promise<void> {
               schemaResult.content,
             );
             await log(migrationId, `SQL schema generated (${schemaResult.inputTokens + schemaResult.outputTokens} tokens)`);
+
+            // If the user supplied a DB connection string upfront, create the
+            // tables in their Supabase project automatically.
+            if (project.supabase_db_url) {
+              const conn = decryptSecret(project.supabase_db_url);
+              const valid = validateSupabaseConnectionString(conn);
+              if (valid.ok) {
+                await log(migrationId, "Applying schema to your Supabase database...");
+                const applyResult = await applySchema(conn, schemaResult.content);
+                if (applyResult.ok) {
+                  await log(migrationId, "Database tables created in Supabase");
+                } else {
+                  await log(migrationId, applyResult.error, "warn");
+                }
+              }
+            }
           } else {
             await log(migrationId, "No source files available for schema generation", "warn");
           }

@@ -26,7 +26,13 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.message || err.error || res.statusText);
+    const error = new Error(err.message || err.error || res.statusText) as Error & {
+      status?: number;
+      data?: Record<string, unknown>;
+    };
+    error.status = res.status;
+    error.data = err;
+    throw error;
   }
 
   return res.json();
