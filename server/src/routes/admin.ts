@@ -6,6 +6,12 @@ import type { AuthRequest } from "../middleware/auth";
 import { requireAuth, requireAdmin } from "../middleware/auth";
 import { validateBody, validateQuery } from "../middleware/validate";
 import { getPresignedDownloadUrl } from "../services/s3";
+import * as s3 from "../services/s3";
+import { getPresignedUploadUrl } from "../services/s3";
+import { isSecretFile } from "../services/migrator";
+import { sendReviewDelivered } from "../services/email";
+import archiver = require("archiver");
+import crypto from "crypto";
 
 const AI_MODEL = (process.env.AI_MODEL || "claude-opus-4-7") as keyof typeof ANTHROPIC_PRICING;
 
@@ -327,6 +333,81 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
   });
 });
 
+// Download the full migrated output as a .zip for code review. The customer's
+// output repo is private under their own GitHub account (we can't read it), but
+// S3 holds everything we need: the original source tree plus the `migrated/`
+// overlay we produced. We reconstruct exactly what the customer received —
+// original files with migrated/scaffold files layered on top — and strip any
+// committed secret files (we never propagate or disclose those).
+router.get("/migrations/:id/download", async (req: AuthRequest, res: Response) => {
+  const migration = await db("migrations").where({ id: req.params.id }).first();
+  if (!migration) {
+    res.status(404).json({ error: "Migration not found" });
+    return;
+  }
+  const project = await db("projects").where({ id: migration.project_id }).first();
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+
+  const prefix = s3.getWorkspacePrefix(project.id, migration.id);
+  const keys = await s3.listFiles(prefix);
+  if (keys.length === 0) {
+    res.status(404).json({ error: "No code is stored for this migration" });
+    return;
+  }
+
+  // outputPath -> relative S3 key. Lay the original tree down first, then let
+  // the `migrated/` overlay win for any file the migration changed or added.
+  const outputMap = new Map<string, string>();
+  for (const rel of keys) {
+    if (rel.startsWith("migrated/")) continue;
+    outputMap.set(rel, rel);
+  }
+  for (const rel of keys) {
+    if (!rel.startsWith("migrated/")) continue;
+    const outPath = rel.slice("migrated/".length);
+    if (outPath) outputMap.set(outPath, rel);
+  }
+  for (const outPath of [...outputMap.keys()]) {
+    if (isSecretFile(outPath)) outputMap.delete(outPath);
+  }
+
+  if (outputMap.size === 0) {
+    res.status(404).json({ error: "No reviewable files found" });
+    return;
+  }
+
+  const safeName =
+    (project.name || "project").replace(/[^a-z0-9_-]+/gi, "-").toLowerCase() ||
+    "project";
+  const filename = `${safeName}-${String(migration.id).slice(0, 8)}.zip`;
+
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  archive.on("error", (err: Error) => {
+    console.error(`[admin] zip error for migration ${migration.id}:`, err.message);
+    res.destroy(err);
+  });
+  archive.pipe(res);
+
+  for (const [outPath, relKey] of outputMap) {
+    try {
+      const buf = await s3.downloadBuffer(`${prefix}/${relKey}`);
+      archive.append(buf, { name: outPath });
+    } catch (err) {
+      console.warn(
+        `[admin] skipped ${relKey} while zipping migration ${migration.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  await archive.finalize();
+});
+
 const reviewStatusSchema = z.object({
   status: z.enum(["reviewing", "reviewed"]),
 }).strip();
@@ -377,6 +458,119 @@ router.patch(
     });
 
     res.json({ id: migration.id, status });
+  },
+);
+
+const reviewUploadUrlSchema = z.object({
+  filename: z.string().min(1).max(255),
+  contentType: z.string().min(1).max(200),
+}).strip();
+
+const ALLOWED_REVIEW_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/octet-stream",
+]);
+
+// Mint a presigned PUT URL so the reviewer can upload the reviewed code archive
+// straight to S3 (no multipart handling on our side). The key is generated
+// server-side and scoped to this migration's workspace so it can't be spoofed.
+router.post(
+  "/migrations/:id/review-upload-url",
+  validateBody(reviewUploadUrlSchema),
+  async (req: AuthRequest, res: Response) => {
+    const { filename, contentType } = req.body;
+    if (!ALLOWED_REVIEW_TYPES.has(contentType)) {
+      res.status(400).json({ error: "Reviewed code must be uploaded as a .zip" });
+      return;
+    }
+
+    const migration = await db("migrations").where({ id: req.params.id }).first();
+    if (!migration) {
+      res.status(404).json({ error: "Migration not found" });
+      return;
+    }
+    const project = await db("projects").where({ id: migration.project_id }).first();
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+
+    const prefix = s3.getWorkspacePrefix(project.id, migration.id);
+    const key = `${prefix}/reviewed/${crypto.randomUUID()}.zip`;
+    const { uploadUrl } = await getPresignedUploadUrl(key, contentType);
+    res.json({ uploadUrl, key });
+  },
+);
+
+const deliverReviewSchema = z.object({
+  notes: z.string().max(20000).optional(),
+  artifact_key: z.string().max(512).optional(),
+  artifact_name: z.string().max(255).optional(),
+}).strip();
+
+// Deliver the review to the customer: save the notes and (optionally) the
+// uploaded reviewed-code archive, then flip the migration to "reviewed".
+router.patch(
+  "/migrations/:id/review",
+  validateBody(deliverReviewSchema),
+  async (req: AuthRequest, res: Response) => {
+    const { notes, artifact_key, artifact_name } = req.body;
+    const migration = await db("migrations").where({ id: req.params.id }).first();
+    if (!migration) {
+      res.status(404).json({ error: "Migration not found" });
+      return;
+    }
+    if (!["pending_review", "reviewing", "reviewed"].includes(migration.status)) {
+      res.status(400).json({
+        error: `Cannot deliver a review for a migration in "${migration.status}" state`,
+      });
+      return;
+    }
+
+    const updates: Record<string, unknown> = {
+      status: "reviewed",
+      reviewed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    if (notes !== undefined) updates.review_notes = notes;
+
+    if (artifact_key !== undefined) {
+      const project = await db("projects").where({ id: migration.project_id }).first();
+      const prefix = project
+        ? s3.getWorkspacePrefix(project.id, migration.id)
+        : "";
+      // Only accept a key we minted for this migration's workspace.
+      if (!prefix || !artifact_key.startsWith(`${prefix}/reviewed/`)) {
+        res.status(400).json({ error: "Invalid artifact key" });
+        return;
+      }
+      updates.review_artifact_key = artifact_key;
+      updates.review_artifact_name = artifact_name || "reviewed-code.zip";
+    }
+
+    await db("migrations").where({ id: migration.id }).update(updates);
+
+    // Notify the customer (best-effort; never block the response on email).
+    try {
+      const project = await db("projects").where({ id: migration.project_id }).first();
+      const user = project
+        ? await db("users").where({ id: project.user_id }).first()
+        : null;
+      if (user?.email) {
+        await sendReviewDelivered({
+          to: user.email,
+          projectName: project?.name || "your project",
+          migrationId: migration.id,
+          hasNotes: !!(updates.review_notes ?? migration.review_notes),
+          hasCode: !!(updates.review_artifact_key ?? migration.review_artifact_key),
+        });
+      }
+    } catch (err) {
+      console.error("[admin] review-delivered email failed:", err);
+    }
+
+    res.json({ id: migration.id, status: "reviewed" });
   },
 );
 

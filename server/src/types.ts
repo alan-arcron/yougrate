@@ -121,6 +121,10 @@ export interface Migration {
   migration_log: MigrationLogEntry[];
   addon_data_migration: boolean;
   addon_code_review: boolean;
+  review_notes: string | null;
+  review_artifact_key: string | null;
+  review_artifact_name: string | null;
+  reviewed_at: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;

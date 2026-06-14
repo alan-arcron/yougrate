@@ -155,7 +155,7 @@ function isCodeFile(filePath: string): boolean {
  * carry over to the output repo unchanged via the clone, so nothing breaks —
  * we just don't transform them or disclose their contents to a third party.
  */
-function isSecretFile(filePath: string): boolean {
+export function isSecretFile(filePath: string): boolean {
   const basename = path.basename(filePath).toLowerCase();
   const ext = path.extname(filePath).toLowerCase();
   // Templates/examples are safe to keep — they contain no real secrets.

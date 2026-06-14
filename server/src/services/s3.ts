@@ -69,6 +69,13 @@ export async function downloadFile(s3Key: string): Promise<string> {
   return await res.Body!.transformToString("utf-8");
 }
 
+export async function downloadBuffer(s3Key: string): Promise<Buffer> {
+  const cmd = new GetObjectCommand({ Bucket: getBucket(), Key: s3Key });
+  const res = await getClient().send(cmd);
+  const bytes = await res.Body!.transformToByteArray();
+  return Buffer.from(bytes);
+}
+
 export async function uploadFile(
   s3Key: string,
   content: string,
@@ -148,7 +155,16 @@ export async function getPresignedUploadUrl(
 export async function getPresignedDownloadUrl(
   key: string,
   expiresIn = 300,
+  opts?: { downloadFilename?: string },
 ): Promise<string> {
-  const cmd = new GetObjectCommand({ Bucket: getBucket(), Key: key });
+  const cmd = new GetObjectCommand({
+    Bucket: getBucket(),
+    Key: key,
+    ...(opts?.downloadFilename
+      ? {
+          ResponseContentDisposition: `attachment; filename="${opts.downloadFilename.replace(/"/g, "")}"`,
+        }
+      : {}),
+  });
   return getSignedUrl(getClient() as any, cmd, { expiresIn });
 }

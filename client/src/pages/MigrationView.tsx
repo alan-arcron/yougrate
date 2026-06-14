@@ -49,6 +49,7 @@ import {
   Server,
   Zap,
   Upload,
+  Download,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -94,6 +95,9 @@ interface MigrationDetail {
   committed_secrets: string[];
   addon_code_review: boolean;
   addon_data_migration: boolean;
+  review_notes: string | null;
+  reviewed_at: string | null;
+  has_review_artifact: boolean;
   supabase_url: string | null;
   supabase_anon_key: string | null;
   has_db_url: boolean;
@@ -376,6 +380,9 @@ export default function MigrationView() {
   const [postDeployChecks, setPostDeployChecks] = useState<
     Record<string, boolean>
   >({});
+  const [downloadingReview, setDownloadingReview] = useState(false);
+  const [pushingReview, setPushingReview] = useState(false);
+  const [reviewBranchUrl, setReviewBranchUrl] = useState<string | null>(null);
 
   async function fetchMigration() {
     try {
@@ -608,6 +615,40 @@ export default function MigrationView() {
       toast.error(msg);
     } finally {
       setPushingEnv(false);
+    }
+  }
+
+  async function handleDownloadReview() {
+    setDownloadingReview(true);
+    try {
+      const res = await api.get<{ url: string; name: string }>(
+        `/migrations/${migrationId}/review-download`,
+      );
+      window.open(res.url, "_blank");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloadingReview(false);
+    }
+  }
+
+  async function handlePushReview() {
+    setPushingReview(true);
+    try {
+      const res = await api.post<{ branch: string; branch_url: string }>(
+        `/migrations/${migrationId}/push-review`,
+      );
+      setReviewBranchUrl(res.branch_url);
+      toast.success(`Reviewed code pushed to the "${res.branch}" branch.`);
+    } catch (err: unknown) {
+      const data = (err as { data?: { needs_github_connect?: boolean } })?.data;
+      if (data?.needs_github_connect) {
+        toast.error("Connect your GitHub account first, then try again.");
+      } else {
+        toast.error(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setPushingReview(false);
     }
   }
 
@@ -1494,14 +1535,75 @@ export default function MigrationView() {
       {isReviewed && (
         <Card className="mb-6 border-green-500">
           <CardContent className="py-6">
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="h-5 w-5 text-green-600" />
-              <div>
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5 shrink-0" />
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium">Code Review Complete</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   Your migrated code has been reviewed by a senior engineer and
                   is ready for use.
+                  {migration.reviewed_at &&
+                    ` Reviewed ${new Date(migration.reviewed_at).toLocaleDateString()}.`}
                 </p>
+
+                {migration.review_notes && (
+                  <div className="mt-3 rounded-md border bg-muted/40 p-3">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                      Reviewer notes
+                    </p>
+                    <p className="text-sm whitespace-pre-wrap leading-relaxed">
+                      {migration.review_notes}
+                    </p>
+                  </div>
+                )}
+
+                {migration.has_review_artifact && (
+                  <div className="mt-3">
+                    <p className="text-[11px] text-muted-foreground mb-2">
+                      The reviewer's updated version of your code — download it or
+                      push it to a <span className="font-mono">yougrate/reviewed</span>{" "}
+                      branch on your GitHub repo to diff and merge.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={downloadingReview}
+                        onClick={handleDownloadReview}
+                      >
+                        {downloadingReview ? (
+                          <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Download className="mr-1.5 h-3 w-3" />
+                        )}
+                        Download (.zip)
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={pushingReview}
+                        onClick={handlePushReview}
+                      >
+                        {pushingReview ? (
+                          <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                        ) : (
+                          <GitBranch className="mr-1.5 h-3 w-3" />
+                        )}
+                        Push to GitHub
+                      </Button>
+                    </div>
+                    {reviewBranchUrl && (
+                      <a
+                        href={reviewBranchUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-flex items-center gap-1 text-xs text-primary underline"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        View the yougrate/reviewed branch
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </CardContent>

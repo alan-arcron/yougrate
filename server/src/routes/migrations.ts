@@ -9,6 +9,7 @@ import {
   runMigration,
   pushMigratedCode,
   runBuildFixLoop,
+  isSecretFile,
 } from "../services/migrator";
 import {
   createCheckoutForMigration,
@@ -30,6 +31,11 @@ import {
 } from "../services/schema-apply";
 import { decryptSecret, encryptSecret } from "../utils/crypto";
 import { redactSecrets } from "../utils/redact";
+import { safeJoin } from "../utils/paths";
+import AdmZip from "adm-zip";
+import fs from "fs/promises";
+import path from "path";
+import os from "os";
 
 const createMigrationSchema = z.object({
   project_id: z.string().uuid(),
@@ -203,9 +209,130 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     supabase_url: project.supabase_url,
     supabase_anon_key: project.supabase_anon_key,
     has_db_url: !!project.supabase_db_url,
+    has_review_artifact: !!migration.review_artifact_key,
     files,
   });
 });
+
+// Customer download of the reviewed code the admin delivered. We mint a
+// short-lived presigned GET URL (the bucket stays private) and force a
+// sensible download filename.
+router.get(
+  "/:id/review-download",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration } = owned;
+    if (!migration.review_artifact_key) {
+      res.status(404).json({ error: "No reviewed code is available yet" });
+      return;
+    }
+    const filename = migration.review_artifact_name || "reviewed-code.zip";
+    const url = await s3.getPresignedDownloadUrl(migration.review_artifact_key, 300, {
+      downloadFilename: filename,
+    });
+    res.json({ url, name: filename });
+  },
+);
+
+// Push the reviewed code straight to the customer's GitHub repo on a dedicated
+// branch, so they can diff/merge it. We unzip the reviewer's archive in memory,
+// guard against zip-slip and secret files, then force-push to a review branch.
+const REVIEW_BRANCH = "yougrate/reviewed";
+
+router.post(
+  "/:id/push-review",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration, project } = owned;
+
+    if (!migration.review_artifact_key) {
+      res.status(400).json({ error: "No reviewed code is available to push yet." });
+      return;
+    }
+
+    const user = await db("users").where({ id: project.user_id }).first();
+    if (!user?.github_access_token) {
+      res.status(400).json({
+        error: "github_not_connected",
+        needs_github_connect: true,
+        message: "Connect your GitHub account to push the reviewed code.",
+      });
+      return;
+    }
+    const token = decryptSecret(user.github_access_token);
+
+    // The migration may have produced a brand-new repo (output_type "new");
+    // in that case push the review branch there. Otherwise the migrated code
+    // lives on the original repo, so target that.
+    let targetRepoFullName = project.github_repo_full_name;
+    let targetRepoUrl = project.github_repo_url;
+    if (migration.output_type === "new" && migration.output_repo_url) {
+      const fullName = migration.output_repo_url
+        .replace(/^https?:\/\/github\.com\//, "")
+        .replace(/\.git$/, "")
+        .replace(/\/$/, "");
+      if (fullName.split("/").length === 2) {
+        targetRepoFullName = fullName;
+        targetRepoUrl = migration.output_repo_url;
+      }
+    }
+
+    const tmpDir = path.join(os.tmpdir(), `yougrate-review-${Date.now()}`);
+    try {
+      const buffer = await s3.downloadBuffer(migration.review_artifact_key);
+
+      const zip = new AdmZip(buffer);
+      let written = 0;
+      for (const entry of zip.getEntries()) {
+        if (entry.isDirectory) continue;
+        // Guard against zip-slip; never write outside the temp dir.
+        const dest = safeJoin(tmpDir, entry.entryName);
+        if (!dest) continue;
+        // Defensive: never propagate committed secrets even if present.
+        if (isSecretFile(entry.entryName)) continue;
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.writeFile(dest, entry.getData());
+        written++;
+      }
+
+      if (written === 0) {
+        res.status(400).json({ error: "The reviewed archive contained no usable files." });
+        return;
+      }
+
+      await githubService.pushToRepo(
+        token,
+        tmpDir,
+        targetRepoFullName,
+        REVIEW_BRANCH,
+        "Reviewed code from Yougrate",
+      );
+
+      const branchUrl = `${targetRepoUrl}/tree/${REVIEW_BRANCH}`;
+      res.json({ ok: true, branch: REVIEW_BRANCH, branch_url: branchUrl });
+    } catch (err) {
+      console.error(
+        `[migration] push-review failed for ${migration.id}:`,
+        err instanceof Error ? redactSecrets(err.message) : String(err),
+      );
+      res.status(500).json({
+        error: redactSecrets(err instanceof Error ? err.message : "Failed to push reviewed code"),
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  },
+);
 
 const confirmSchema = z.object({
   addon_code_review: z.boolean().optional(),

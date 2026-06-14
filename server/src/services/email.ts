@@ -130,6 +130,57 @@ ${images}
   }
 }
 
+export async function sendReviewDelivered(opts: {
+  to: string;
+  projectName: string;
+  migrationId: string;
+  hasNotes: boolean;
+  hasCode: boolean;
+}): Promise<void> {
+  if (!opts.to) return;
+
+  const clientUrl = process.env.CLIENT_URL || "http://localhost:5175";
+  const link = `${clientUrl}/migrations/${opts.migrationId}`;
+
+  const extras: string[] = [];
+  if (opts.hasNotes) extras.push("notes from the reviewer");
+  if (opts.hasCode) extras.push("a downloadable copy of the reviewed code");
+  const extrasText =
+    extras.length > 0 ? ` You'll find ${extras.join(" and ")} on your migration page.` : "";
+
+  const html = htmlLayout(`
+<p>Hi,</p>
+<p>Good news — the code review for <strong>${opts.projectName}</strong> is complete.${extrasText}</p>
+<div class="meta">
+  <div class="meta-row"><span class="meta-label">Project</span><br/>${opts.projectName}</div>
+</div>
+<p>Open your migration to read the reviewer's notes${opts.hasCode ? ", download the reviewed code, or push it straight to your GitHub repo" : ""}.</p>
+<p style="margin-top: 24px;">
+  <a href="${link}" class="btn">View your review</a>
+</p>
+`, `Your code review for ${opts.projectName} is complete`);
+
+  const plainText = `Hi,\n\nThe code review for ${opts.projectName} is complete.${extrasText}\n\nView it here: ${link}\n\n— Yougrate by Arcron Information Systems`;
+
+  const cmd = new SendEmailCommand({
+    Source: FROM_EMAIL(),
+    Destination: { ToAddresses: [opts.to] },
+    Message: {
+      Subject: { Data: `Your code review for ${opts.projectName} is complete` },
+      Body: {
+        Html: { Data: html },
+        Text: { Data: plainText },
+      },
+    },
+  });
+
+  try {
+    await getClient().send(cmd);
+  } catch (err) {
+    console.error("[email] Failed to send review-delivered email:", err);
+  }
+}
+
 export async function sendTicketConfirmation(ticket: TicketInfo): Promise<void> {
   const html = htmlLayout(`
 <p>Hi,</p>

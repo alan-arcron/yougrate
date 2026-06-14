@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { api } from "@/lib/api";
+import { api, apiDownload } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,8 +27,8 @@ import {
   Cpu,
   TrendingUp,
   Eye,
-  ExternalLink,
   RefreshCw,
+  Download,
 } from "lucide-react";
 
 interface Stats {
@@ -202,6 +202,10 @@ export default function Admin() {
   const [pendingReviews, setPendingReviews] = useState<PendingReview[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(false);
   const [updatingReview, setUpdatingReview] = useState<string | null>(null);
+  const [downloadingCode, setDownloadingCode] = useState<string | null>(null);
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [reviewFiles, setReviewFiles] = useState<Record<string, File | null>>({});
+  const [deliveringReview, setDeliveringReview] = useState<string | null>(null);
 
   useEffect(() => {
     if (authLoading || !profile) return;
@@ -247,6 +251,54 @@ export default function Admin() {
       setMigrationDetail(null);
     } finally {
       setLoadingDetail(false);
+    }
+  }
+
+  async function downloadCode(migrationId: string) {
+    setDownloadingCode(migrationId);
+    try {
+      await apiDownload(`/admin/migrations/${migrationId}/download`, `${migrationId}.zip`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to download code");
+    } finally {
+      setDownloadingCode(null);
+    }
+  }
+
+  async function deliverReview(id: string) {
+    setDeliveringReview(id);
+    try {
+      let artifact_key: string | undefined;
+      let artifact_name: string | undefined;
+      const file = reviewFiles[id];
+      if (file) {
+        const contentType = file.type || "application/zip";
+        const { uploadUrl, key } = await api.post<{ uploadUrl: string; key: string }>(
+          `/admin/migrations/${id}/review-upload-url`,
+          { filename: file.name, contentType },
+        );
+        const put = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": contentType },
+          body: file,
+        });
+        if (!put.ok) throw new Error("Upload to storage failed");
+        artifact_key = key;
+        artifact_name = file.name;
+      }
+      await api.patch(`/admin/migrations/${id}/review`, {
+        notes: reviewNotes[id] ?? "",
+        artifact_key,
+        artifact_name,
+      });
+      toast.success("Review delivered to the customer");
+      setReviewFiles((prev) => ({ ...prev, [id]: null }));
+      loadReviews();
+      api.get<Stats>("/admin/stats").then(setStats).catch(console.error);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to deliver review");
+    } finally {
+      setDeliveringReview(null);
     }
   }
 
@@ -805,8 +857,28 @@ export default function Admin() {
                                               {migrationDetail.output_branch && (
                                                 <span className="text-muted-foreground"> ({migrationDetail.output_branch})</span>
                                               )}
+                                              <span className="text-muted-foreground"> · private to the customer (not accessible to you)</span>
                                             </p>
                                           )}
+                                          <div className="mt-2">
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              className="h-7 text-xs"
+                                              disabled={downloadingCode === expandedMigration}
+                                              onClick={() => downloadCode(expandedMigration!)}
+                                            >
+                                              {downloadingCode === expandedMigration ? (
+                                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                              ) : (
+                                                <Download className="h-3 w-3 mr-1" />
+                                              )}
+                                              Download code (.zip)
+                                            </Button>
+                                            <p className="text-[11px] text-muted-foreground mt-1">
+                                              Full migrated output rebuilt from S3 (secrets excluded) — what the customer received.
+                                            </p>
+                                          </div>
                                           {migrationDetail.error_message && (
                                             <div className="mt-2 bg-red-500/10 border border-red-500/20 rounded p-2">
                                               <p className="text-xs text-red-600 whitespace-pre-wrap">{migrationDetail.error_message}</p>
@@ -1022,19 +1094,19 @@ export default function Admin() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        {r.output_repo_url && (
-                          <a
-                            href={r.output_repo_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Button variant="outline" size="sm">
-                              <ExternalLink className="mr-1.5 h-3 w-3" />
-                              View Code
-                            </Button>
-                          </a>
-                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={downloadingCode === r.id}
+                          onClick={() => downloadCode(r.id)}
+                        >
+                          {downloadingCode === r.id ? (
+                            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                          ) : (
+                            <Download className="mr-1.5 h-3 w-3" />
+                          )}
+                          Download code
+                        </Button>
                         {r.status === "pending_review" && (
                           <Button
                             size="sm"
@@ -1046,17 +1118,64 @@ export default function Admin() {
                             {updatingReview === r.id ? "Updating..." : "Start Review"}
                           </Button>
                         )}
-                        {r.status === "reviewing" && (
-                          <Button
-                            size="sm"
-                            disabled={updatingReview === r.id}
-                            onClick={() => updateReviewStatus(r.id, "reviewed")}
-                          >
-                            {updatingReview === r.id ? "Updating..." : "Mark Reviewed"}
-                          </Button>
-                        )}
                       </div>
                     </div>
+
+                    {r.status === "reviewing" && (
+                      <div className="mt-4 border-t pt-4 space-y-3">
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                            Review notes for the customer
+                          </label>
+                          <textarea
+                            value={reviewNotes[r.id] ?? ""}
+                            onChange={(e) =>
+                              setReviewNotes((prev) => ({ ...prev, [r.id]: e.target.value }))
+                            }
+                            placeholder="Summary of findings, changes you made, and anything the customer should know..."
+                            rows={4}
+                            className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                            Reviewed code (.zip, optional)
+                          </label>
+                          <input
+                            type="file"
+                            accept=".zip,application/zip,application/x-zip-compressed"
+                            onChange={(e) =>
+                              setReviewFiles((prev) => ({
+                                ...prev,
+                                [r.id]: e.target.files?.[0] ?? null,
+                              }))
+                            }
+                            className="mt-1 block w-full text-xs text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-xs file:font-medium"
+                          />
+                          {reviewFiles[r.id] && (
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                              Selected: {reviewFiles[r.id]!.name}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex justify-end">
+                          <Button
+                            size="sm"
+                            disabled={deliveringReview === r.id}
+                            onClick={() => deliverReview(r.id)}
+                          >
+                            {deliveringReview === r.id ? (
+                              <>
+                                <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                Delivering...
+                              </>
+                            ) : (
+                              "Deliver review to customer"
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               ))}
