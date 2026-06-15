@@ -15,7 +15,7 @@ export default function Privacy() {
 
         <h1 className="text-3xl font-bold mb-2">Privacy Policy</h1>
         <p className="text-sm text-muted-foreground mb-10">
-          Last updated: June 11, 2026
+          Last updated: June 15, 2026
         </p>
 
         <div className="prose prose-sm dark:prose-invert max-w-none space-y-8">
@@ -50,17 +50,32 @@ export default function Privacy() {
                 create projects and trigger deployments on your behalf.
               </li>
               <li>
+                <strong>Railway credentials:</strong> If you choose to deploy a
+                backend server, the Railway access token you provide, used to
+                create projects and deploy services on your behalf. Encrypted
+                before storage and never returned to the browser.
+              </li>
+              <li>
                 <strong>Supabase configuration:</strong> Your Supabase project
-                URL and anonymous key, used to configure environment variables
+                ID/URL and anonymous key, used to configure environment variables
                 in your deployed application. Optionally, a database connection
                 string (which includes your database password) that you provide
                 so we can create your tables &mdash; this is encrypted before
                 storage and only used to apply your generated schema.
               </li>
               <li>
+                <strong>Environment variables:</strong> If you upload a{" "}
+                <code>.env</code> file (or paste its contents) to push to Vercel
+                or Railway, the values are parsed in memory and forwarded to the
+                provider you select. They are never written to our database or
+                stored on our servers.
+              </li>
+              <li>
                 <strong>Source code:</strong> Your repository files are read
                 during analysis and migration. Code content is processed
-                temporarily and stored in AWS S3 during active migrations.
+                temporarily and stored in AWS S3 during active migrations. If
+                you purchase a code review, your migrated code is retained so a
+                senior engineer on our team can review it and deliver feedback.
               </li>
               <li>
                 <strong>Billing information:</strong> Stripe customer ID,
@@ -81,7 +96,14 @@ export default function Privacy() {
             <ul className="space-y-2 text-muted-foreground">
               <li>
                 <strong>To perform migrations:</strong> Analyzing your code,
-                rewriting files, pushing to GitHub, and deploying to Vercel.
+                rewriting files, generating and applying your database schema,
+                pushing to GitHub, and deploying to Vercel (and Railway, if your
+                app needs a backend server).
+              </li>
+              <li>
+                <strong>To perform code reviews (when purchased):</strong> A
+                senior engineer on our team manually reviews your migrated code
+                and returns notes and, optionally, an updated copy of the code.
               </li>
               <li>
                 <strong>To process payments:</strong> Creating Stripe checkout
@@ -140,6 +162,11 @@ export default function Privacy() {
                 using your provided token.
               </li>
               <li>
+                <strong>Railway API</strong> — Creating projects and deploying
+                backend servers, using your provided token (only if you connect
+                Railway).
+              </li>
+              <li>
                 <strong>Anthropic (Claude API)</strong> — Your source code is
                 sent to Anthropic's API for analysis and migration. Per
                 Anthropic's API terms, data sent through the API is not used to
@@ -162,11 +189,11 @@ export default function Privacy() {
                 retained long-term after migration completion.
               </li>
               <li>
-                <strong>Connected credentials:</strong> GitHub and Vercel access
-                tokens and your Supabase database connection string (if provided)
-                are encrypted at the application layer (AES-256-GCM) before being
-                stored, on top of the database's own encryption-at-rest, and are
-                never returned to the browser.
+                <strong>Connected credentials:</strong> GitHub, Vercel, and
+                Railway access tokens and your Supabase database connection
+                string (if provided) are encrypted at the application layer
+                (AES-256-GCM) before being stored, on top of the database's own
+                encryption-at-rest, and are never returned to the browser.
               </li>
               <li>
                 <strong>Support images:</strong> Images uploaded with bug
@@ -191,8 +218,8 @@ export default function Privacy() {
               </li>
               <li>
                 <strong>Token revocation:</strong> You can disconnect your
-                GitHub and Vercel accounts at any time through Settings, or
-                revoke tokens directly on those platforms.
+                GitHub, Vercel, and Railway accounts at any time through
+                Settings, or revoke tokens directly on those platforms.
               </li>
             </ul>
           </section>

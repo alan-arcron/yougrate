@@ -20,6 +20,9 @@ import {
   CheckCircle2,
   Trash2,
   Loader2,
+  Info,
+  Lock,
+  CreditCard,
 } from "lucide-react";
 import { GithubIcon } from "@/components/icons";
 
@@ -50,6 +53,13 @@ export default function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [quota, setQuota] = useState<{
+    used: number;
+    limit: number | null;
+    remaining: number | null;
+    needs_payment: boolean;
+  } | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
 
   async function handleDeleteProject(project: Project) {
     if (
@@ -80,6 +90,41 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, []);
 
+  function loadQuota() {
+    api
+      .get<{
+        used: number;
+        limit: number | null;
+        remaining: number | null;
+        needs_payment: boolean;
+      }>("/billing/analysis-quota")
+      .then(setQuota)
+      .catch(() => setQuota(null));
+  }
+
+  useEffect(() => {
+    loadQuota();
+  }, []);
+
+  async function handleUnlock() {
+    setUnlocking(true);
+    try {
+      const { checkout_url } = await api.post<{ checkout_url: string }>(
+        "/billing/unlock-analyses",
+      );
+      window.location.href = checkout_url;
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
+  // Admins get Infinity, which serializes to null over JSON — only show the
+  // counter for users with a real finite limit.
+  const hasFiniteQuota = quota != null && typeof quota.limit === "number";
+  const outOfAnalyses = hasFiniteQuota && quota!.needs_payment;
+
   useEffect(() => {
     if (searchParams.get("unlocked") === "true") {
       api
@@ -89,6 +134,7 @@ export default function Dashboard() {
             toast.success(
               "Analyses unlocked! You can now run 2 more analyses.",
             );
+            loadQuota();
           }
         })
         .catch(() => {
@@ -113,6 +159,50 @@ export default function Dashboard() {
           New Migration
         </Button>
       </div>
+
+      {hasFiniteQuota && !outOfAnalyses && (
+        <div className="mb-6 flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          <Info className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+          <p className="text-muted-foreground">
+            Analyses are free to preview the cost estimate. You have{" "}
+            <span className="font-medium text-foreground">
+              {quota!.remaining} of {quota!.limit}
+            </span>{" "}
+            free analyses left. After that, it&apos;s $10 to cover prior usage
+            and unlock 2 more.
+          </p>
+        </div>
+      )}
+
+      {outOfAnalyses && (
+        <Card className="mb-6 border-amber-500/50">
+          <CardContent className="py-5">
+            <div className="flex items-start gap-3">
+              <Lock className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium">Analysis limit reached</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  You&apos;ve used all {quota!.limit} of your free analyses. Pay
+                  $10 to cover previous usage and unlock 2 more.
+                </p>
+                <Button
+                  size="sm"
+                  className="mt-3"
+                  onClick={handleUnlock}
+                  disabled={unlocking}
+                >
+                  {unlocking ? (
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                  ) : (
+                    <CreditCard className="mr-2 h-3 w-3" />
+                  )}
+                  {unlocking ? "Redirecting..." : "Unlock Analyses — $10"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {loading || profileLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -197,16 +287,13 @@ export default function Dashboard() {
                         </a>{" "}
                         and create a new project. You&apos;ll need the{" "}
                         <strong>Project URL</strong> and{" "}
-                        <strong>anon key</strong> — find both under{" "}
-                        <a
-                          href="https://supabase.com/dashboard/project/_/settings/api"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          Project Settings &rarr; API
-                        </a>
-                        .
+                        <strong>anon key</strong>. The anon key is under{" "}
+                        <strong>
+                          Project Settings &rarr; API Keys &rarr; Legacy anon,
+                          service_role API keys
+                        </strong>
+                        , and the URL is on the{" "}
+                        <strong>Project Settings &rarr; Data API</strong> page.
                       </p>
                     </div>
                   </div>

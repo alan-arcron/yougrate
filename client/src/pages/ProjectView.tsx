@@ -164,16 +164,18 @@ export default function ProjectView() {
               <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50 border border-border text-xs text-muted-foreground">
                 <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span>
-                  Find both values in your{" "}
+                  In your{" "}
                   <a
-                    href="https://supabase.com/dashboard/project/_/settings/api"
+                    href="https://supabase.com/dashboard/projects"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-primary hover:underline"
                   >
                     Supabase dashboard
                   </a>
-                  {" "}under <strong>Project Settings &rarr; API</strong>. The URL is listed as "Project URL" and the anon key is under "Project API keys" (the one labeled <code className="bg-muted px-1 rounded">anon</code> / <code className="bg-muted px-1 rounded">public</code>).
+                  , open your project. The anon key is under{" "}
+                  <strong>Project Settings &rarr; API Keys &rarr; Legacy anon, service_role API keys</strong>{" "}
+                  (the one labeled <code className="bg-muted px-1 rounded">anon</code> / <code className="bg-muted px-1 rounded">public</code>), and the URL is on the <strong>Project Settings &rarr; Data API</strong> page.
                 </span>
               </div>
               <div className="space-y-2">

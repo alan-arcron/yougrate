@@ -39,7 +39,17 @@ export default function Login() {
           <CardHeader className="text-center">
             <CardTitle>Get started</CardTitle>
             <CardDescription>
-              Sign in with GitHub to start migrating your projects
+              Sign in with GitHub to start migrating your projects. You'll need a
+              GitHub account first —{" "}
+              <a
+                href="https://github.com/signup"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-primary underline underline-offset-2"
+              >
+                create one for free
+              </a>
+              .
             </CardDescription>
           </CardHeader>
           <CardContent>

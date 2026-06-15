@@ -25,6 +25,7 @@ import {
   Bot,
   Code2,
   Headphones,
+  Server,
 } from "lucide-react";
 
 function Logo({ className = "h-6 w-6" }: { className?: string }) {
@@ -70,6 +71,12 @@ const FEATURES = [
       "Deploys straight to Vercel production with your Supabase environment variables configured automatically.",
   },
   {
+    icon: Server,
+    title: "Backends Welcome",
+    description:
+      "Apps that need a real long-running server aren't left out — we detect them and deploy the backend to Railway while the frontend goes to Vercel.",
+  },
+  {
     icon: GitBranch,
     title: "GitHub Integration",
     description:
@@ -93,7 +100,7 @@ const STEPS = [
     number: "2",
     title: "Connect Supabase",
     description:
-      "Paste your Supabase project URL and anon key. Free tier works great.",
+      "Paste your Supabase project ID and anon key. Free tier works great.",
   },
   {
     number: "3",
@@ -110,9 +117,10 @@ export default function Landing() {
     <div className="min-h-screen bg-background text-foreground">
       {/* Promo banner */}
       <div className="bg-primary text-primary-foreground text-center py-2 px-4 text-sm">
-        Use code <strong className="font-bold tracking-wide">ARCRON</strong> at
-        checkout for a <strong>free senior engineer code review</strong> — just
-        select the code review add-on. First 10 customers only.
+        Summer promo: use code{" "}
+        <strong className="font-bold tracking-wide">ARCRON</strong> at checkout
+        for a <strong>free senior engineer code review</strong> — just select
+        the code review add-on.
       </div>
 
       {/* Nav */}

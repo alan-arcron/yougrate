@@ -341,6 +341,25 @@ function previewEnvKeys(text: string): string[] {
   return keys;
 }
 
+/** Build the public Supabase URL from a project ref/ID. */
+function refToUrl(ref: string): string {
+  return ref ? `https://${ref}.supabase.co` : "";
+}
+
+/** Extract the project ref/ID from a Supabase URL (e.g. https://<ref>.supabase.co). */
+function urlToRef(url: string | null | undefined): string {
+  if (!url) return "";
+  const m = url.match(/^https?:\/\/([a-z0-9]+)\.supabase\.(co|com)/i);
+  return m ? m[1] : "";
+}
+
+/** Normalize whatever the user pastes into a bare project ref. */
+function normalizeRef(input: string): string {
+  const raw = input.trim();
+  if (raw.includes("supabase.")) return urlToRef(raw);
+  return raw.replace(/[^a-zA-Z0-9]/g, "");
+}
+
 export default function MigrationView() {
   const { profile } = useAuth();
   const { projectId, migrationId } = useParams();
@@ -357,6 +376,7 @@ export default function MigrationView() {
   const [pushType, setPushType] = useState<"new" | "branch">("new");
   const [addonCodeReview, setAddonCodeReview] = useState(false);
   const [supabaseUrl, setSupabaseUrl] = useState<string | null>(null);
+  const [supabaseProjectId, setSupabaseProjectId] = useState<string | null>(null);
   const [supabaseKey, setSupabaseKey] = useState<string | null>(null);
   const [monthlySpend, setMonthlySpend] = useState<string | null>(null);
   const [claudeSpend, setClaudeSpend] = useState("20");
@@ -965,10 +985,28 @@ export default function MigrationView() {
                 {migration.has_db_url
                   ? "Leave blank to reuse your saved connection string, or paste a new one to override it. "
                   : ""}
-                Supabase Dashboard → Project Settings → Database → Connection
-                string (use the <strong>Session</strong> / direct string, port
-                5432). It contains your DB password — we send it over TLS, use
-                it once, and only store it if you check the box below.
+                {urlToRef(migration.supabase_url) ? (
+                  <>
+                    <a
+                      href={`https://supabase.com/dashboard/project/${urlToRef(migration.supabase_url)}?showConnect=true&connectTab=direct`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Open the Connect dialog
+                    </a>{" "}
+                    and copy the <strong>Direct connection</strong> URI (replace{" "}
+                    <code className="bg-muted px-1 rounded">[YOUR-PASSWORD]</code>{" "}
+                    with your database password).{" "}
+                  </>
+                ) : (
+                  <>
+                    In your Supabase project, click <strong>Connect</strong> and
+                    copy the <strong>Direct connection</strong> URI.{" "}
+                  </>
+                )}
+                It contains your DB password — we send it over TLS, use it once,
+                and only store it if you check the box below.
               </span>
             </label>
 
@@ -1095,10 +1133,21 @@ export default function MigrationView() {
               (() => {
                 const addonCents = addonCodeReview ? 7500 : 0;
                 const totalCents = migration.estimated_cost_cents + addonCents;
+                const effectiveProjectId =
+                  supabaseProjectId ?? urlToRef(migration.supabase_url);
                 const effectiveUrl =
-                  supabaseUrl ?? migration.supabase_url ?? "";
+                  supabaseUrl ??
+                  refToUrl(effectiveProjectId) ??
+                  migration.supabase_url ??
+                  "";
                 const effectiveKey =
                   supabaseKey ?? migration.supabase_anon_key ?? "";
+                const connectUrl = effectiveProjectId
+                  ? `https://supabase.com/dashboard/project/${effectiveProjectId}?showConnect=true&connectTab=direct`
+                  : "";
+                const anonKeyUrl = effectiveProjectId
+                  ? `https://supabase.com/dashboard/project/${effectiveProjectId}/settings/api-keys/legacy`
+                  : "";
                 const credsReady =
                   effectiveUrl.trim() !== "" && effectiveKey.trim() !== "";
                 return (
@@ -1206,30 +1255,69 @@ export default function MigrationView() {
                           Connect your Supabase project
                         </p>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          Required to run the migration. Find both under{" "}
+                          Required to run the migration. In your{" "}
                           <a
-                            href="https://supabase.com/dashboard/project/_/settings/api"
+                            href="https://supabase.com/dashboard/projects"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-primary hover:underline"
                           >
-                            Project Settings &rarr; API
+                            Supabase dashboard
                           </a>
-                          . The anon key is public and safe to embed.
+                          , open your project and go to{" "}
+                          <strong>
+                            Project Settings &rarr; API Keys &rarr; Legacy anon,
+                            service_role API keys
+                          </strong>
+                          . Copy the <code className="bg-muted px-1 rounded">anon</code> key — it&apos;s
+                          public and safe to embed. The URL is on the{" "}
+                          <strong>Project Settings &rarr; Data API</strong> page.
                         </p>
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="estimate-supabase-url">
-                          Supabase URL
+                        <Label htmlFor="estimate-supabase-id">
+                          Supabase Project ID
                         </Label>
                         <Input
                           className="bg-white"
-                          id="estimate-supabase-url"
-                          placeholder="https://abcdefghijkl.supabase.co"
-                          value={effectiveUrl}
-                          onChange={(e) => setSupabaseUrl(e.target.value)}
+                          id="estimate-supabase-id"
+                          placeholder="abcdefghijklmnopqrst"
+                          value={effectiveProjectId}
+                          onChange={(e) => {
+                            const ref = normalizeRef(e.target.value);
+                            setSupabaseProjectId(ref);
+                            setSupabaseUrl(refToUrl(ref));
+                          }}
                         />
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          Found in your{" "}
+                          <a
+                            href="https://supabase.com/dashboard/projects"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline"
+                          >
+                            Supabase dashboard
+                          </a>{" "}
+                          under <strong>Project Settings &rarr; General</strong>{" "}
+                          (the &ldquo;Reference ID&rdquo;), or as the{" "}
+                          <code className="bg-muted px-1 rounded">
+                            &lt;id&gt;
+                          </code>{" "}
+                          in your project URL.
+                          {effectiveProjectId && (
+                            <>
+                              {" "}
+                              Your project URL:{" "}
+                              <code className="bg-muted px-1 rounded">
+                                {effectiveUrl}
+                              </code>
+                            </>
+                          )}
+                        </p>
                       </div>
+                      {effectiveProjectId && (
+                        <>
                       <div className="space-y-2">
                         <Label htmlFor="estimate-supabase-key">Anon Key</Label>
                         <Input
@@ -1239,6 +1327,22 @@ export default function MigrationView() {
                           value={effectiveKey}
                           onChange={(e) => setSupabaseKey(e.target.value)}
                         />
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          <a
+                            href={anonKeyUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline"
+                          >
+                            Open your API keys
+                          </a>{" "}
+                          and copy the{" "}
+                          <code className="bg-muted px-1 rounded">anon</code>{" "}
+                          /{" "}
+                          <code className="bg-muted px-1 rounded">public</code>{" "}
+                          key (under &ldquo;Legacy anon, service_role API
+                          keys&rdquo;). It&apos;s public and safe to embed.
+                        </p>
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="estimate-supabase-conn">
@@ -1259,9 +1363,30 @@ export default function MigrationView() {
                         <p className="text-xs text-muted-foreground leading-relaxed">
                           Provide this and we&apos;ll{" "}
                           <strong>create your tables automatically</strong> when
-                          the migration finishes. Find it under Project Settings
-                          &rarr; Database (use the <strong>Session</strong>{" "}
-                          string, port 5432). Stored encrypted.
+                          the migration finishes.{" "}
+                          {connectUrl ? (
+                            <>
+                              <a
+                                href={connectUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                Open the Connect dialog
+                              </a>{" "}
+                              and copy the <strong>Direct connection</strong>{" "}
+                              URI (it includes <code className="bg-muted px-1 rounded">
+                                [YOUR-PASSWORD]
+                              </code>{" "}
+                              — replace it with your database password).
+                            </>
+                          ) : (
+                            <>
+                              Enter your Project ID above to get a direct link to
+                              the connection string.
+                            </>
+                          )}{" "}
+                          Stored encrypted.
                         </p>
                         <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
                           <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -1278,6 +1403,8 @@ export default function MigrationView() {
                           </p>
                         </div>
                       </div>
+                        </>
+                      )}
                     </div>
 
                     <div className="flex justify-end">
