@@ -217,8 +217,9 @@ export default function Dashboard() {
         </div>
       ) : projects.length === 0 ? (
         <>
-          {/* Onboarding: show getting-started steps when user has no projects */}
-          {(!profile?.github_connected || !profile?.vercel_connected) && (
+          {/* Onboarding: show getting-started steps whenever the user has no
+              projects. Completed connection steps render as green checkmarks. */}
+          {(
             <Card className="mb-8">
               <CardHeader>
                 <CardTitle className="text-lg">Getting Started</CardTitle>
