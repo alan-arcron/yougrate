@@ -29,6 +29,7 @@ import {
   Eye,
   RefreshCw,
   Download,
+  Trash2,
 } from "lucide-react";
 
 interface Stats {
@@ -190,6 +191,8 @@ export default function Admin() {
   const [expandedUser, setExpandedUser] = useState<string | null>(null);
   const [userMigrations, setUserMigrations] = useState<UserMigration[]>([]);
   const [resettingUser, setResettingUser] = useState<string | null>(null);
+  const [deletingUser, setDeletingUser] = useState<string | null>(null);
+  const [deletingMigration, setDeletingMigration] = useState<string | null>(null);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingTickets, setLoadingTickets] = useState(false);
   const [editingTicket, setEditingTicket] = useState<string | null>(null);
@@ -357,6 +360,50 @@ export default function Admin() {
       toast.error(msg);
     } finally {
       setResettingUser(null);
+    }
+  }
+
+  async function deleteUser(u: AdminUser) {
+    if (
+      !window.confirm(
+        `Permanently delete ${u.email}?\n\nThis removes the user and ALL their data — projects, migrations, files, and billing records — plus their S3 workspaces and login. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingUser(u.id);
+    try {
+      await api.delete(`/admin/users/${u.id}`);
+      setUsers((prev) => prev.filter((x) => x.id !== u.id));
+      if (expandedUser === u.id) setExpandedUser(null);
+      api.get<Stats>("/admin/stats").then(setStats).catch(console.error);
+      toast.success("User and all their data deleted");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete user");
+    } finally {
+      setDeletingUser(null);
+    }
+  }
+
+  async function deleteMigration(m: UserMigration) {
+    if (
+      !window.confirm(
+        `Permanently delete the "${m.project_name}" migration?\n\nThis removes the migration, its files, and its S3 workspace (including any reviewed code). Billing records are kept. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingMigration(m.id);
+    try {
+      await api.delete(`/admin/migrations/${m.id}`);
+      setUserMigrations((prev) => prev.filter((x) => x.id !== m.id));
+      if (expandedMigration === m.id) setExpandedMigration(null);
+      api.get<Stats>("/admin/stats").then(setStats).catch(console.error);
+      toast.success("Migration deleted");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete migration");
+    } finally {
+      setDeletingMigration(null);
     }
   }
 
@@ -954,12 +1001,57 @@ export default function Admin() {
                                     ) : (
                                       <p className="text-xs text-muted-foreground">Failed to load details</p>
                                     )}
+
+                                    <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 p-2.5">
+                                      <p className="text-[11px] text-muted-foreground">
+                                        Permanently delete this migration and its files.
+                                      </p>
+                                      <Button
+                                        variant="destructive"
+                                        size="sm"
+                                        className="h-7 px-2 text-xs"
+                                        disabled={deletingMigration === m.id}
+                                        onClick={() => deleteMigration(m)}
+                                      >
+                                        {deletingMigration === m.id ? (
+                                          <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                        ) : (
+                                          <Trash2 className="mr-1.5 h-3 w-3" />
+                                        )}
+                                        Delete migration
+                                      </Button>
+                                    </div>
                                   </div>
                                 )}
                               </div>
                             ))}
                           </div>
                         )}
+
+                        <Separator />
+                        <div className="flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                          <div>
+                            <p className="text-xs font-medium text-destructive">
+                              Danger zone
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              Permanently delete this user and all their data.
+                            </p>
+                          </div>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={deletingUser === u.id}
+                            onClick={() => deleteUser(u)}
+                          >
+                            {deletingUser === u.id ? (
+                              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="mr-1.5 h-3 w-3" />
+                            )}
+                            Delete user
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </CardContent>

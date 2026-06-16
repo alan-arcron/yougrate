@@ -10,8 +10,20 @@ import * as s3 from "../services/s3";
 import { getPresignedUploadUrl } from "../services/s3";
 import { isSecretFile } from "../services/migrator";
 import { sendReviewDelivered } from "../services/email";
+import { createClient } from "@supabase/supabase-js";
 import archiver = require("archiver");
 import crypto from "crypto";
+
+let _supabaseAdmin: ReturnType<typeof createClient> | null = null;
+function getSupabaseAdmin() {
+  if (!_supabaseAdmin) {
+    _supabaseAdmin = createClient(
+      process.env.SUPABASE_URL || "",
+      process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+    );
+  }
+  return _supabaseAdmin;
+}
 
 const AI_MODEL = (process.env.AI_MODEL || "claude-opus-4-7") as keyof typeof ANTHROPIC_PRICING;
 
@@ -270,6 +282,56 @@ router.post(
   },
 );
 
+// Permanently delete a user and all of their data. Deleting the users row
+// cascades to projects -> migrations -> migration_files and billing_events;
+// support tickets keep their row with user_id nulled. We additionally purge the
+// user's S3 workspaces (not covered by the DB cascade) and the Supabase auth
+// account so they can't sign back in.
+router.delete("/users/:id", async (req: AuthRequest, res: Response) => {
+  const userId = String(req.params.id);
+  if (userId === req.userId) {
+    res.status(400).json({ error: "You can't delete your own admin account." });
+    return;
+  }
+
+  const user = await db("users").where({ id: userId }).first();
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  const projects = await db("projects").where({ user_id: userId }).select("id");
+  for (const p of projects) {
+    try {
+      await s3.deleteWorkspace(`workspaces/${p.id}`);
+    } catch (err) {
+      console.error(
+        `[admin] failed to delete S3 workspace for project ${p.id}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  await db("users").where({ id: userId }).delete();
+
+  try {
+    const { error } = await getSupabaseAdmin().auth.admin.deleteUser(userId);
+    if (error) {
+      console.error(
+        `[admin] Supabase auth deleteUser failed for ${userId}:`,
+        error.message,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[admin] Supabase auth deleteUser threw for ${userId}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  res.json({ ok: true, deleted_projects: projects.length });
+});
+
 router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
   const migration = await db("migrations").where({ id: req.params.id }).first();
   if (!migration) {
@@ -331,6 +393,34 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
     billing_events: billingEvents,
     files,
   });
+});
+
+// Permanently delete a single migration. Deleting the migrations row cascades to
+// migration_files; billing_events.migration_id is set null (the billing record
+// is preserved for accounting). We also purge the migration's S3 workspace,
+// which includes any reviewed-code artifacts stored under it.
+router.delete("/migrations/:id", async (req: AuthRequest, res: Response) => {
+  const migrationId = String(req.params.id);
+  const migration = await db("migrations").where({ id: migrationId }).first();
+  if (!migration) {
+    res.status(404).json({ error: "Migration not found" });
+    return;
+  }
+
+  try {
+    await s3.deleteWorkspace(
+      s3.getWorkspacePrefix(migration.project_id, migration.id),
+    );
+  } catch (err) {
+    console.error(
+      `[admin] failed to delete S3 workspace for migration ${migration.id}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  await db("migrations").where({ id: migrationId }).delete();
+
+  res.json({ ok: true });
 });
 
 // Download the full migrated output as a .zip for code review. The customer's
