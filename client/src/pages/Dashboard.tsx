@@ -273,27 +273,14 @@ export default function Dashboard() {
                     </div>
                     <div className="flex-1">
                       <p className="text-sm font-medium">
-                        Create a Supabase project
+                        Start your free analysis
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Sign up at{" "}
-                        <a
-                          href="https://supabase.com/dashboard"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          supabase.com
-                        </a>{" "}
-                        and create a new project. You&apos;ll need the{" "}
-                        <strong>Project URL</strong> and{" "}
-                        <strong>anon key</strong>. The anon key is under{" "}
-                        <strong>
-                          Project Settings &rarr; API Keys &rarr; Legacy anon,
-                          service_role API keys
-                        </strong>
-                        , and the URL is on the{" "}
-                        <strong>Project Settings &rarr; Data API</strong> page.
+                        Click <strong>New Migration</strong> and pick the repo
+                        you want to migrate. Your first{" "}
+                        <strong>2 analyses are free</strong> — we scan the
+                        codebase, detect the platform, and show you an exact cost
+                        estimate before you pay anything.
                       </p>
                     </div>
                   </div>
@@ -303,12 +290,28 @@ export default function Dashboard() {
                       3
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm font-medium">Start a migration</p>
+                      <p className="text-sm font-medium">
+                        Add your Supabase project &amp; pay
+                      </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Click <strong>New Migration</strong>, select a repo,
-                        paste your Supabase credentials, and we&apos;ll analyze
-                        the codebase. After reviewing the estimate, pay and the
-                        AI migration runs automatically.
+                        After reviewing the estimate, create a free project at{" "}
+                        <a
+                          href="https://supabase.com/dashboard"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                        >
+                          supabase.com
+                        </a>{" "}
+                        and enter your <strong>Project ID</strong> and{" "}
+                        <strong>anon key</strong> (found under{" "}
+                        <strong>
+                          Project Settings &rarr; API Keys &rarr; Legacy anon,
+                          service_role API keys
+                        </strong>
+                        ). Optionally paste your database connection string so we
+                        create your tables for you. Then pay and the AI migration
+                        runs automatically.
                       </p>
                     </div>
                   </div>
@@ -322,8 +325,11 @@ export default function Dashboard() {
                         Push & deploy (optional)
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Once complete, push the migrated code to a new GitHub
-                        repo and optionally deploy to Vercel. Connect Vercel in{" "}
+                        When the migration finishes, push the code to a new
+                        GitHub repo, then deploy the frontend to Vercel &mdash;
+                        and the backend to Railway if your app needs a
+                        long-running server. We can push your environment
+                        variables for you too. Connect Vercel and Railway in{" "}
                         <button
                           onClick={() => navigate("/settings")}
                           className="text-primary hover:underline"
