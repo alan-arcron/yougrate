@@ -17,6 +17,37 @@ export async function vercelFetch(token: string, path: string, options: RequestI
   });
 }
 
+/** Turn a Vercel error response body into a clean, user-facing message. */
+export function vercelErrorMessage(
+  body: Record<string, unknown>,
+  fallback: string,
+): string {
+  const e = (body?.error ?? {}) as Record<string, unknown>;
+  const code = typeof e.code === "string" ? e.code : "";
+  const message = typeof e.message === "string" ? e.message : "";
+  const link = typeof e.link === "string" ? e.link : "";
+
+  // The Vercel GitHub App isn't installed on the user's account, so Vercel
+  // can't link the repository. This is fixable by the user in ~30 seconds.
+  if (
+    /install the GitHub integration|GitHub App|Install GitHub App/i.test(
+      message,
+    ) ||
+    (code === "bad_request" && /github/i.test(message))
+  ) {
+    return (
+      "Vercel can't connect to your GitHub repository because the Vercel GitHub App isn't installed on your account yet. " +
+      "Install it at https://github.com/apps/vercel and grant it access to this repository, then click Retry. " +
+      "If the repo is private, make sure Vercel has access to it."
+    );
+  }
+
+  if (message) {
+    return `Vercel: ${message}${link ? ` (${link})` : ""}`;
+  }
+  return fallback;
+}
+
 export type TokenStatus = "valid" | "invalid" | "unknown";
 
 /**
@@ -71,7 +102,9 @@ export async function createProject(
 
   if (!res.ok) {
     const err = await res.json() as Record<string, unknown>;
-    throw new Error(`Vercel API error: ${JSON.stringify(err)}`);
+    throw new Error(
+      vercelErrorMessage(err, `Vercel API error: ${JSON.stringify(err)}`),
+    );
   }
 
   return await res.json() as VercelProject;
@@ -101,7 +134,9 @@ export async function triggerDeployment(
 
   if (!res.ok) {
     const err = await res.json() as Record<string, unknown>;
-    throw new Error(`Vercel deploy error: ${JSON.stringify(err)}`);
+    throw new Error(
+      vercelErrorMessage(err, `Vercel deploy error: ${JSON.stringify(err)}`),
+    );
   }
 
   return await res.json() as { id: string; url: string; readyState: string };

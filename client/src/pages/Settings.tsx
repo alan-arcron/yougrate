@@ -343,7 +343,33 @@ export default function Settings() {
                   >
                     vercel.com/account/tokens
                   </a>
+                  . When creating it, set the{" "}
+                  <span className="font-medium text-foreground">Scope</span> to{" "}
+                  <span className="font-medium text-foreground">
+                    Full Account
+                  </span>{" "}
+                  (your personal account) &mdash; a token scoped to a specific
+                  team/workspace won&apos;t work, since we deploy to your
+                  personal account.
                 </p>
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                  First time deploying? Vercel also needs its GitHub App
+                  installed on your personal GitHub account so it can link your
+                  repo. Install it at{" "}
+                  <a
+                    href="https://github.com/apps/vercel"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline font-medium"
+                  >
+                    github.com/apps/vercel
+                  </a>{" "}
+                  and choose{" "}
+                  <span className="font-medium">All repositories</span> when
+                  granting access &mdash; we often push the migrated code to a{" "}
+                  <span className="font-medium">new</span> repo, so limiting it
+                  to a single repo can block the deploy.
+                </div>
               </div>
               <Button
                 onClick={async () => {
