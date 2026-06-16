@@ -106,10 +106,19 @@ interface Ticket {
   created_at: string;
 }
 
+interface AdminProject {
+  id: string;
+  name: string;
+  github_repo_full_name: string;
+  status: string;
+  created_at: string;
+}
+
 interface UserMigration {
   id: string;
   status: string;
   detected_platform: string | null;
+  project_id: string;
   project_name: string;
   github_repo_full_name: string;
   files_to_migrate: number;
@@ -190,6 +199,8 @@ export default function Admin() {
   const [ticketFilter, setTicketFilter] = useState("open");
   const [expandedUser, setExpandedUser] = useState<string | null>(null);
   const [userMigrations, setUserMigrations] = useState<UserMigration[]>([]);
+  const [userProjects, setUserProjects] = useState<AdminProject[]>([]);
+  const [deletingProject, setDeletingProject] = useState<string | null>(null);
   const [resettingUser, setResettingUser] = useState<string | null>(null);
   const [deletingUser, setDeletingUser] = useState<string | null>(null);
   const [deletingMigration, setDeletingMigration] = useState<string | null>(null);
@@ -424,12 +435,37 @@ export default function Admin() {
     }
     setExpandedUser(userId);
     try {
-      const migrations = await api.get<UserMigration[]>(
-        `/admin/users/${userId}/migrations`,
-      );
+      const [migrations, projects] = await Promise.all([
+        api.get<UserMigration[]>(`/admin/users/${userId}/migrations`),
+        api.get<AdminProject[]>(`/admin/users/${userId}/projects`),
+      ]);
       setUserMigrations(migrations);
+      setUserProjects(projects);
     } catch {
       setUserMigrations([]);
+      setUserProjects([]);
+    }
+  }
+
+  async function deleteProject(p: AdminProject) {
+    if (
+      !window.confirm(
+        `Permanently delete the "${p.name}" project?\n\nThis removes the project and ALL its migrations, files, and S3 workspaces. Billing records are kept. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingProject(p.id);
+    try {
+      await api.delete(`/projects/${p.id}`);
+      setUserProjects((prev) => prev.filter((x) => x.id !== p.id));
+      setUserMigrations((prev) => prev.filter((m) => m.project_id !== p.id));
+      api.get<Stats>("/admin/stats").then(setStats).catch(console.error);
+      toast.success("Project and all its migrations deleted");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete project");
+    } finally {
+      setDeletingProject(null);
     }
   }
 
@@ -690,6 +726,50 @@ export default function Admin() {
                             <p className="font-mono text-xs truncate">{u.id}</p>
                           </div>
                         </div>
+                        <Separator />
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Projects
+                        </p>
+                        {userProjects.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            No projects
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {userProjects.map((p) => (
+                              <div
+                                key={p.id}
+                                className="flex items-center justify-between rounded border px-3 py-2 text-xs"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="font-medium truncate">{p.name}</span>
+                                  <span className="text-muted-foreground truncate">
+                                    {p.github_repo_full_name}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <Badge variant="outline" className="text-xs capitalize">
+                                    {p.status}
+                                  </Badge>
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    className="h-7 px-2 text-xs"
+                                    disabled={deletingProject === p.id}
+                                    onClick={() => deleteProject(p)}
+                                  >
+                                    {deletingProject === p.id ? (
+                                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="mr-1.5 h-3 w-3" />
+                                    )}
+                                    Delete
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <Separator />
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           Migrations
