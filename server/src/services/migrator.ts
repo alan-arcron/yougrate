@@ -7,6 +7,7 @@ import {
   estimateTokens,
   calculateCost,
   generateSupabaseSchema,
+  describeAiError,
   MODEL,
   type AnalysisContext,
 } from "./ai";
@@ -488,7 +489,7 @@ export async function runAnalysis(
     // Cleanup temp dir
     await fs.rm(localPath, { recursive: true, force: true });
   } catch (err: unknown) {
-    const message = friendlyError(err);
+    const message = (await describeAiError(err)) ?? friendlyError(err);
     await updateMigration(migrationId, {
       status: "failed",
       error_message: message,
@@ -756,7 +757,7 @@ export async function runMigration(migrationId: string): Promise<void> {
       }
     }
   } catch (err: unknown) {
-    const message = friendlyError(err);
+    const message = (await describeAiError(err)) ?? friendlyError(err);
     await updateMigration(migrationId, {
       status: "failed",
       error_message: message,
@@ -1183,7 +1184,7 @@ export async function runBuildFixLoop(
       }
     }
   } catch (err: unknown) {
-    const message = friendlyError(err);
+    const message = (await describeAiError(err)) ?? friendlyError(err);
     await updateMigration(migrationId, {
       status: "failed",
       error_message: message,

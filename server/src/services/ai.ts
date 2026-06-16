@@ -9,10 +9,121 @@ function getClient(): Anthropic {
   if (!client) {
     client = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
-      maxRetries: 5,
+      // We handle the bulk of retry logic ourselves (see createMessage) so we
+      // can also retry server-side 5xx errors that Anthropic tags with
+      // `x-should-retry: false`, which the SDK would otherwise give up on.
+      maxRetries: 2,
     });
   }
   return client;
+}
+
+/** Transient = worth retrying: connection errors, timeouts, rate limits, 5xx. */
+function isTransientAnthropicError(err: unknown): boolean {
+  if (!(err instanceof Anthropic.APIError)) return false;
+  const status = err.status;
+  if (status === undefined) return true; // connection/network error, no response
+  if (status === 408 || status === 409 || status === 429) return true;
+  if (status >= 500) return true;
+  return false;
+}
+
+const MAX_AI_ATTEMPTS = 4;
+
+/**
+ * Wrapper around `messages.create` that retries transient failures with
+ * exponential backoff. Unlike the SDK's built-in retry, this retries 5xx
+ * responses even when Anthropic sends `x-should-retry: false`, since those are
+ * almost always brief server-side blips on Anthropic's end.
+ */
+async function createMessage(
+  anthropic: Anthropic,
+  params: Anthropic.Messages.MessageCreateParamsNonStreaming,
+): Promise<Anthropic.Messages.Message> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_AI_ATTEMPTS; attempt++) {
+    try {
+      return await anthropic.messages.create(params);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= MAX_AI_ATTEMPTS || !isTransientAnthropicError(err)) {
+        throw err;
+      }
+      const backoffMs =
+        Math.min(1000 * 2 ** (attempt - 1), 8000) +
+        Math.floor(Math.random() * 500);
+      console.warn(
+        `[ai] transient Anthropic error (attempt ${attempt}/${MAX_AI_ATTEMPTS}), retrying in ${backoffMs}ms`,
+      );
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastErr;
+}
+
+/** Live status from Anthropic's public Statuspage. null if unreachable. */
+export async function getAnthropicStatus(): Promise<{
+  indicator: string;
+  description: string;
+} | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch("https://status.anthropic.com/api/v2/status.json", {
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      status?: { indicator?: string; description?: string };
+    };
+    if (!data.status) return null;
+    return {
+      indicator: data.status.indicator || "unknown",
+      description: data.status.description || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * If `err` is a transient/server-side Anthropic error, returns a friendly,
+ * user-facing explanation (making clear it's Anthropic's side, not the user's),
+ * enriched with Anthropic's live status. Returns null for non-AI or
+ * non-transient errors so the caller can fall back to its generic handler.
+ */
+export async function describeAiError(err: unknown): Promise<string | null> {
+  if (!(err instanceof Anthropic.APIError)) return null;
+  const status = err.status;
+  const transient =
+    status === undefined ||
+    status === 408 ||
+    status === 409 ||
+    status === 429 ||
+    (typeof status === "number" && status >= 500);
+  if (!transient) return null;
+
+  let base: string;
+  if (status === 429) {
+    base = "Our AI provider (Anthropic) is rate-limiting requests right now.";
+  } else if (status === 529 || /overload/i.test(err.message)) {
+    base = "Our AI provider (Anthropic) is temporarily overloaded.";
+  } else {
+    base =
+      "Our AI provider (Anthropic) hit a temporary error on their end. This isn't a problem with your project, code, or payment.";
+  }
+
+  const live = await getAnthropicStatus();
+  let note = "";
+  if (live) {
+    note =
+      live.indicator && live.indicator !== "none"
+        ? ` Anthropic is reporting an active incident: "${live.description}".`
+        : " Anthropic's status page shows all systems operational, so this was most likely a brief blip.";
+  }
+
+  return `${base}${note} Please click Retry in a few minutes — your completed work is saved, so nothing is lost or double-charged.`;
 }
 
 type ModelId = keyof typeof ANTHROPIC_PRICING;
@@ -48,7 +159,7 @@ export async function analyzeFile(
   const anthropic = getClient();
   const model = resolveModel(ctx.modelOverride);
 
-  const response = await anthropic.messages.create({
+  const response = await createMessage(anthropic, {
     model,
     max_tokens: 500,
     messages: [
@@ -140,7 +251,7 @@ export async function migrateFile(
 ): Promise<AIResponse> {
   const anthropic = getClient();
 
-  const response = await anthropic.messages.create({
+  const response = await createMessage(anthropic, {
     model: MODEL,
     max_tokens: 8000,
     system: "You are a code migration tool. You output ONLY raw source code. Never wrap output in markdown code fences (```). Never add explanatory comments, disclaimers, or notes about what you changed. Never output partial files or placeholders like '// rest of file unchanged'. Always output the complete file from first line to last.",
@@ -215,7 +326,7 @@ export async function fixBuildErrors(
     .filter(Boolean)
     .join("\n\n");
 
-  const response = await anthropic.messages.create({
+  const response = await createMessage(anthropic, {
     model: MODEL,
     max_tokens: 16000,
     system: "You are a code repair tool. You output JSON containing complete corrected source files. Every file value must be the FULL file content from first line to last — never partial content, never placeholders, never comments explaining what to do instead of actual code. If you do not have enough context to fix a file, output it unchanged rather than adding explanatory comments.",
@@ -303,7 +414,7 @@ export async function generateSupabaseSchema(
     .map(([path, content]) => `### ${path}\n\`\`\`\n${content.substring(0, 6000)}\n\`\`\``)
     .join("\n\n");
 
-  const response = await anthropic.messages.create({
+  const response = await createMessage(anthropic, {
     model: MODEL,
     max_tokens: 16000,
     system: "You are a database schema migration expert. You output only valid SQL that can be run directly in a Supabase SQL editor. Never wrap output in markdown code fences.",
