@@ -74,6 +74,22 @@ async function updateMigration(
   });
 }
 
+/**
+ * Heartbeat for long-running, in-process deploy/build work. Bumps updated_at on
+ * a fixed interval so the API can tell a live worker from a dead one (e.g. after
+ * a server restart) and reconcile a stuck build quickly instead of hanging.
+ * Returns a stop function to call in a finally block.
+ */
+function startHeartbeat(migrationId: string): () => void {
+  const timer = setInterval(() => {
+    db("migrations")
+      .where({ id: migrationId })
+      .update({ updated_at: new Date().toISOString() })
+      .catch(() => {});
+  }, 10_000);
+  return () => clearInterval(timer);
+}
+
 const TOKEN_BUDGET_MULTIPLIER = 2;
 
 const BINARY_EXTENSIONS = new Set([
@@ -1013,6 +1029,7 @@ export async function runDirectDeploy(migrationId: string): Promise<void> {
   const user = await db("users").where({ id: project.user_id }).first();
   if (!user?.vercel_access_token) throw new Error("Vercel not connected");
 
+  const stopHeartbeat = startHeartbeat(migrationId);
   try {
     await updateMigration(migrationId, { status: "building" });
     await db("projects").where({ id: project.id }).update({ status: "deploying" });
@@ -1055,6 +1072,8 @@ export async function runDirectDeploy(migrationId: string): Promise<void> {
     });
     await db("projects").where({ id: project.id }).update({ status: "failed" });
     await log(migrationId, `Direct deploy failed: ${message}`, "error");
+  } finally {
+    stopHeartbeat();
   }
 }
 
@@ -1079,8 +1098,12 @@ export async function runBuildFixLoop(
     throw new Error("GitHub not connected");
   }
 
+  const stopHeartbeat = startHeartbeat(migrationId);
   try {
-    await updateMigration(migrationId, { status: "building" });
+    await updateMigration(migrationId, {
+      status: "building",
+      deployment_id: deploymentId,
+    });
     await db("projects")
       .where({ id: project.id })
       .update({ status: "deploying" });
@@ -1088,6 +1111,10 @@ export async function runBuildFixLoop(
     let currentDeploymentId = deploymentId;
 
     for (let attempt = 1; attempt <= MAX_BUILD_FIX_ATTEMPTS; attempt++) {
+      // Keep the persisted deployment id in sync with the one we're watching so
+      // the API can reconcile against the right Vercel deployment if we die.
+      await updateMigration(migrationId, { deployment_id: currentDeploymentId });
+
       await log(
         migrationId,
         `Vercel build started (attempt ${attempt}/${MAX_BUILD_FIX_ATTEMPTS}). Waiting for result...`,
@@ -1129,6 +1156,32 @@ export async function runBuildFixLoop(
           decryptSecret(user.vercel_access_token),
           currentDeploymentId,
         );
+
+        // Some failures are Vercel-side policy/permission blocks, not code
+        // problems — the AI can't fix these, so don't waste attempts. Fail fast
+        // with actionable guidance (the Git-less direct deploy avoids them).
+        if (
+          /commit author|contributing access|does not support collaboration|Hobby Plan|not authorized|forbidden/i.test(
+            buildLog,
+          )
+        ) {
+          await updateMigration(migrationId, {
+            status: "failed",
+            error_message:
+              "Vercel blocked this Git deployment (likely a Hobby-plan restriction on private repos, or the commit author isn't the project owner). " +
+              "Use the one-click \"Deploy to Vercel\" button instead — it deploys without GitHub and avoids this entirely. " +
+              "Alternatively, make the GitHub repo public or upgrade your Vercel plan.",
+          });
+          await db("projects")
+            .where({ id: project.id })
+            .update({ status: "migrated" });
+          await log(
+            migrationId,
+            "Vercel blocked the Git deployment (permission/plan). Recommend the no-GitHub direct deploy.",
+            "error",
+          );
+          return;
+        }
 
         const errorLines = buildLog
           .split("\n")
@@ -1348,6 +1401,8 @@ export async function runBuildFixLoop(
     });
     await db("projects").where({ id: project.id }).update({ status: "failed" });
     await log(migrationId, `Build fix loop failed: ${message}`, "error");
+  } finally {
+    stopHeartbeat();
   }
 }
 

@@ -121,11 +121,31 @@ export async function pushToRepo(
   const remoteUrl = `https://x-access-token:${accessToken}@github.com/${repoFullName}.git`;
   const git = simpleGit(localPath);
 
+  // Attribute the commit to the repo owner's GitHub identity. Vercel's Hobby
+  // plan blocks deploys whose commit author isn't the project owner (it treats
+  // them as third-party collaboration on a private repo). Using the owner's
+  // GitHub no-reply email (id+login form, always tied to their account) makes
+  // Vercel recognize the author as the owner and allow the deploy.
+  let authorName = "Yougrate";
+  let authorEmail = "noreply@github.com";
+  try {
+    const { data: ghUser } = await getOctokit(accessToken).users.getAuthenticated();
+    if (ghUser.login) {
+      authorName = ghUser.login;
+      authorEmail =
+        ghUser.id && ghUser.login
+          ? `${ghUser.id}+${ghUser.login}@users.noreply.github.com`
+          : ghUser.email || authorEmail;
+    }
+  } catch {
+    // Fall back to the generic identity if we can't resolve the GitHub user.
+  }
+
   try {
     await fs.rm(path.join(localPath, ".git"), { recursive: true, force: true });
     await git.init();
-    await git.addConfig("user.email", "noreply@github.com");
-    await git.addConfig("user.name", "Yougrate");
+    await git.addConfig("user.email", authorEmail);
+    await git.addConfig("user.name", authorName);
     await git.addConfig("http.version", "HTTP/1.1");
     await git.addConfig("http.postBuffer", "524288000");
     await git.checkout(["-b", branch]);

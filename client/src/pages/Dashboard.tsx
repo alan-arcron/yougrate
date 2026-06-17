@@ -219,7 +219,7 @@ export default function Dashboard() {
         <>
           {/* Onboarding: show getting-started steps whenever the user has no
               projects. Completed connection steps render as green checkmarks. */}
-          {(
+          {
             <Card className="mb-8">
               <CardHeader>
                 <CardTitle className="text-lg">Getting Started</CardTitle>
@@ -280,8 +280,8 @@ export default function Dashboard() {
                         Click <strong>New Migration</strong> and pick the repo
                         you want to migrate. Your first{" "}
                         <strong>2 analyses are free</strong> — we scan the
-                        codebase, detect the platform, and show you an exact cost
-                        estimate before you pay anything.
+                        codebase, detect the platform, and show you an exact
+                        cost estimate before you pay anything.
                       </p>
                     </div>
                   </div>
@@ -310,9 +310,9 @@ export default function Dashboard() {
                           Project Settings &rarr; API Keys &rarr; Legacy anon,
                           service_role API keys
                         </strong>
-                        ). Optionally paste your database connection string so we
-                        create your tables for you. Then pay and the AI migration
-                        runs automatically.
+                        ). Optionally paste your database connection string so
+                        we create your tables for you. Then pay and the AI
+                        migration runs automatically.
                       </p>
                     </div>
                   </div>
@@ -329,8 +329,9 @@ export default function Dashboard() {
                         When the migration finishes, push the code to a new
                         GitHub repo, then deploy the frontend to Vercel &mdash;
                         and the backend to Railway if your app needs a
-                        long-running server. We can push your environment
-                        variables for you too. Connect Vercel and Railway in{" "}
+                        long-running server (we'll let you know if this applies
+                        to your app). We can push your environment variables for
+                        you too. Connect Vercel and Railway in{" "}
                         <button
                           onClick={() => navigate("/settings")}
                           className="text-primary hover:underline"
@@ -344,7 +345,7 @@ export default function Dashboard() {
                 </div>
               </CardContent>
             </Card>
-          )}
+          }
 
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-16">

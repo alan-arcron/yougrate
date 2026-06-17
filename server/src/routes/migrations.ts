@@ -190,6 +190,62 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   }
   const { migration, project } = owned;
 
+  // Self-heal orphaned builds. The deploy/build-fix work runs as an in-process
+  // background task that heartbeats updated_at every ~10s while alive. If we
+  // don't see a heartbeat for a while, the worker likely died (e.g. server
+  // restart) and the row would otherwise be stuck in "building"/"fixing"
+  // forever. In that case, reconcile against Vercel's real deployment status so
+  // the result surfaces in ~1 minute instead of the user waiting indefinitely.
+  const STALE_HEARTBEAT_MS = 60 * 1000;
+  if (
+    (migration.status === "building" || migration.status === "fixing") &&
+    migration.updated_at &&
+    Date.now() - new Date(migration.updated_at).getTime() > STALE_HEARTBEAT_MS
+  ) {
+    let newStatus: string | null = null;
+    let newError: string | null = null;
+
+    const user = await db("users").where({ id: req.userId }).first();
+    if (migration.deployment_id && user?.vercel_access_token) {
+      try {
+        const dep = await vercelService.getDeploymentStatus(
+          decryptSecret(user.vercel_access_token),
+          migration.deployment_id,
+        );
+        if (dep.readyState === "READY") {
+          await db("projects")
+            .where({ id: project.id })
+            .update({ status: "deployed" });
+          project.status = "deployed";
+          newStatus = "completed";
+        } else if (
+          dep.readyState === "ERROR" ||
+          dep.readyState === "CANCELED"
+        ) {
+          newStatus = "failed";
+          newError =
+            "The Vercel deployment failed. Open the project in Vercel to see the build logs, then try again \u2014 the one-click \"Deploy to Vercel\" button is the most reliable.";
+        }
+      } catch {
+        // Couldn't reach Vercel; fall through to the timeout result below.
+      }
+    }
+
+    if (!newStatus) {
+      newStatus = "failed";
+      newError =
+        "The deployment stopped responding and timed out. Please try again.";
+    }
+
+    await db("migrations").where({ id: migration.id }).update({
+      status: newStatus,
+      error_message: newError,
+      updated_at: new Date().toISOString(),
+    });
+    migration.status = newStatus;
+    migration.error_message = newError;
+  }
+
   const files = await db("migration_files")
     .where({ migration_id: migration.id })
     .whereNot({ status: "skipped" })
