@@ -436,6 +436,11 @@ router.post(
       .update({ status: "confirmed" });
 
     if (updated > 0) {
+      // Paying for a migration refunds the user's free analyses.
+      await db("users")
+        .where({ id: req.userId })
+        .update({ free_analyses_used: 0 });
+
       runMigration(migration.id).catch((err) => {
         console.error("[migration] Migration error:", err);
       });

@@ -333,6 +333,18 @@ export async function handleCheckoutCompleted(
     return null;
   }
 
+  // Base migration payment (no `type`): the user has converted to a paid
+  // migration, so give their free analyses back by resetting usage to 0.
+  // Add-on payments (overage, code_review) carry a `type` and are skipped.
+  if (!type) {
+    const userId = session.metadata?.userId;
+    if (userId) {
+      await db("users")
+        .where({ id: userId })
+        .update({ free_analyses_used: 0 });
+    }
+  }
+
   return session.metadata?.migrationId || null;
 }
 
