@@ -205,8 +205,8 @@ export async function getProject(
  * Uses `?upsert=true` so existing keys are overwritten instead of erroring with
  * ENV_CONFLICT. Values are stored as type "sensitive" — Vercel will not echo
  * them back via the API/dashboard after creation, matching our "never expose
- * secrets again" posture. Targets all environments so the values apply to
- * production, preview, and development builds.
+ * secrets again" posture. Targets production + preview (Vercel disallows
+ * Sensitive env vars on the development target).
  *
  * Returns the list of keys that were submitted (names only — never values).
  */
@@ -218,11 +218,13 @@ export async function upsertEnvVars(
   const entries = Object.entries(vars);
   if (entries.length === 0) return [];
 
+  // Sensitive env vars cannot target "development" (Vercel rejects it), so we
+  // only apply them to production + preview — the environments deploys use.
   const body = entries.map(([key, value]) => ({
     key,
     value,
     type: "sensitive",
-    target: ["production", "preview", "development"],
+    target: ["production", "preview"],
   }));
 
   const res = await vercelFetch(
