@@ -20,6 +20,7 @@ import { getRawStripe, handleCheckoutCompleted } from "./services/billing";
 import { runMigration } from "./services/migrator";
 import { startStallDetector } from "./services/stall-detector";
 import { requestLogger } from "./middleware/logger";
+import { isUnderConstruction } from "./middleware/auth";
 import { redactError } from "./utils/redact";
 
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
@@ -226,6 +227,11 @@ app.use("/api/admin", globalLimiter, adminRouter);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+// Public runtime config the client can read before authenticating.
+app.get("/api/config", (_req, res) => {
+  res.json({ under_construction: isUnderConstruction() });
 });
 
 // Global error handler — never leak stack traces to clients

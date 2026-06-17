@@ -20,6 +20,17 @@ export function isAdmin(email?: string): boolean {
   return !!email && ADMIN_EMAILS.includes(email.toLowerCase());
 }
 
+/**
+ * Maintenance mode. When UNDER_CONSTRUCTION is truthy we lock the dashboard for
+ * everyone except admins (so the operator can still log in and test) while the
+ * public marketing site stays up. Read at call time so toggling the env var +
+ * restart takes effect without a rebuild.
+ */
+export function isUnderConstruction(): boolean {
+  const v = (process.env.UNDER_CONSTRUCTION || "").trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes" || v === "on";
+}
+
 export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token) {
@@ -37,6 +48,17 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
 
     req.userId = data.user.id;
     req.userEmail = data.user.email;
+
+    // Maintenance mode: block everyone but admins from the authenticated API.
+    if (isUnderConstruction() && !isAdmin(req.userEmail)) {
+      res.status(503).json({
+        error:
+          "Yougrate is undergoing maintenance right now. Please check back soon.",
+        under_construction: true,
+      });
+      return;
+    }
+
     next();
   } catch (err) {
     console.warn(`[auth] Auth failed: ${err instanceof Error ? err.message : String(err)}`);

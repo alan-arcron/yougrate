@@ -21,6 +21,7 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   profileLoading: boolean;
+  underConstruction: boolean;
   signInWithGitHub: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -34,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(true);
+  const [underConstruction, setUnderConstruction] = useState(false);
 
   async function syncProfile(s?: Session | null) {
     const currentSession = s || session;
@@ -81,6 +83,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfileLoading(false);
     }
   }
+
+  useEffect(() => {
+    api
+      .get<{ under_construction: boolean }>("/config")
+      .then((c) => setUnderConstruction(!!c.under_construction))
+      .catch(() => setUnderConstruction(false));
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => {
@@ -134,6 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         loading,
         profileLoading,
+        underConstruction,
         signInWithGitHub,
         signOut,
         refreshProfile,

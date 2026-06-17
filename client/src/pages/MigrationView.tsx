@@ -362,6 +362,16 @@ function normalizeRef(input: string): string {
   return raw.replace(/[^a-zA-Z0-9]/g, "");
 }
 
+/**
+ * Build the Supabase direct connection string from a project ref + DB password.
+ * Supabase direct connections always follow this host pattern, so the user only
+ * needs to supply their database password.
+ */
+function buildDbConnString(ref: string, password: string): string {
+  if (!ref || !password) return "";
+  return `postgresql://postgres:${encodeURIComponent(password)}@db.${ref}.supabase.co:5432/postgres`;
+}
+
 export default function MigrationView() {
   const { profile } = useAuth();
   const { projectId, migrationId } = useParams();
@@ -386,7 +396,7 @@ export default function MigrationView() {
   const [monthlySpend, setMonthlySpend] = useState<string | null>(null);
   const [claudeSpend, setClaudeSpend] = useState("20");
   const [schemaDialogOpen, setSchemaDialogOpen] = useState(false);
-  const [dbConnString, setDbConnString] = useState("");
+  const [dbPassword, setDbPassword] = useState("");
   const [rememberDbConn, setRememberDbConn] = useState(false);
   const [applyingSchema, setApplyingSchema] = useState(false);
   const [schemaApplied, setSchemaApplied] = useState(false);
@@ -555,12 +565,18 @@ export default function MigrationView() {
       toast.error("Enter your Supabase URL and anon key before continuing.");
       return;
     }
+    const ref = (
+      supabaseProjectId ??
+      urlToRef(migration?.supabase_url) ??
+      ""
+    ).trim();
+    const conn = buildDbConnString(ref, dbPassword.trim());
     setPaying(true);
     try {
       await api.patch(`/projects/${projectId}/supabase`, {
         supabase_url: url,
         supabase_anon_key: key,
-        connection_string: dbConnString.trim() || undefined,
+        connection_string: conn || undefined,
       });
       const res = await api.post<{ checkout_url?: string; paid?: boolean }>(
         `/migrations/${migrationId}/confirm`,
@@ -599,18 +615,24 @@ export default function MigrationView() {
   }
 
   async function handleApplySchema() {
+    const ref = (
+      supabaseProjectId ??
+      urlToRef(migration?.supabase_url) ??
+      ""
+    ).trim();
+    const conn = buildDbConnString(ref, dbPassword.trim());
     setApplyingSchema(true);
     try {
       await api.post(`/migrations/${migrationId}/apply-schema`, {
-        connection_string: dbConnString.trim() || undefined,
+        connection_string: conn || undefined,
         save: rememberDbConn,
       });
       toast.success(
-        "Schema applied — tables created in your Supabase project!",
+        "Tables created in your Supabase project! Next, import your existing data — see the note below.",
       );
       setSchemaApplied(true);
       setSchemaDialogOpen(false);
-      setDbConnString("");
+      setDbPassword("");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(msg);
@@ -968,6 +990,28 @@ export default function MigrationView() {
                 </p>
               </div>
             )}
+            <div className="mt-3 flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-200">
+              <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <p className="leading-relaxed">
+                <strong>This creates empty tables — your existing rows
+                aren&apos;t copied over.</strong>{" "}
+                We rebuild your database structure (tables, columns, indexes,
+                and security policies), but moving your actual data is a
+                separate step you control. The easiest way is to export your
+                old data to CSV and import it from the Supabase dashboard
+                (Table Editor → your table → <em>Insert</em> →{" "}
+                <em>Import data from CSV</em>). See{" "}
+                <a
+                  href="https://supabase.com/docs/guides/database/import-data"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline font-medium"
+                >
+                  Supabase&apos;s import-data guide
+                </a>{" "}
+                for CSV, pgloader, and direct Postgres copy options.
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -978,8 +1022,9 @@ export default function MigrationView() {
             <DialogTitle>Apply schema to Supabase</DialogTitle>
             <DialogDescription>
               This runs the AI-generated SQL against your Supabase database and
-              creates the tables, policies, and indexes. It executes DDL
-              directly on your database — review the generated{" "}
+              creates the tables, policies, and indexes (structure only — it
+              does not copy your existing rows). It executes DDL directly on
+              your database — review the generated{" "}
               <code className="text-[11px]">
                 supabase/migrations/001_initial_schema.sql
               </code>{" "}
@@ -989,45 +1034,47 @@ export default function MigrationView() {
 
           <div className="space-y-3">
             <label className="block">
-              <span className="text-sm font-medium">
-                Supabase connection string
-              </span>
+              <span className="text-sm font-medium">Database password</span>
               <Input
                 type="password"
                 autoComplete="off"
-                placeholder="postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres"
-                value={dbConnString}
-                onChange={(e) => setDbConnString(e.target.value)}
-                className="mt-1 font-mono text-xs"
+                placeholder="Your Supabase database password"
+                value={dbPassword}
+                onChange={(e) => setDbPassword(e.target.value)}
+                className="mt-1"
               />
               <span className="text-[11px] text-muted-foreground mt-1 block leading-relaxed">
                 {migration.has_db_url
-                  ? "Leave blank to reuse your saved connection string, or paste a new one to override it. "
+                  ? "Leave blank to reuse your saved connection, or enter your password again to override it. "
                   : ""}
+                We build the connection string for you from your Project ID
                 {urlToRef(migration.supabase_url) ? (
                   <>
-                    <a
-                      href={`https://supabase.com/dashboard/project/${urlToRef(migration.supabase_url)}?showConnect=true&connectTab=direct`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary hover:underline"
-                    >
-                      Open the Connect dialog
-                    </a>{" "}
-                    and copy the <strong>Direct connection</strong> URI (replace{" "}
+                    {" "}
+                    (
                     <code className="bg-muted px-1 rounded">
-                      [YOUR-PASSWORD]
-                    </code>{" "}
-                    with your database password).{" "}
+                      db.{urlToRef(migration.supabase_url)}.supabase.co
+                    </code>
+                    )
                   </>
+                ) : null}{" "}
+                — just enter your database password. Forgot it? Reset it under{" "}
+                {urlToRef(migration.supabase_url) ? (
+                  <a
+                    href={`https://supabase.com/dashboard/project/${urlToRef(migration.supabase_url)}/settings/database`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Project Settings → Database
+                  </a>
                 ) : (
-                  <>
-                    In your Supabase project, click <strong>Connect</strong> and
-                    copy the <strong>Direct connection</strong> URI.{" "}
-                  </>
+                  <span className="font-medium">
+                    Project Settings → Database
+                  </span>
                 )}
-                It contains your DB password — we send it over TLS, use it once,
-                and only store it if you check the box below.
+                . We send it over TLS, use it once, and only store it if you
+                check the box below.
               </span>
             </label>
 
@@ -1038,7 +1085,7 @@ export default function MigrationView() {
                 onChange={(e) => setRememberDbConn(e.target.checked)}
                 className="h-4 w-4 rounded border-border"
               />
-              Remember this connection string (encrypted) for re-applies
+              Remember this connection (encrypted) for re-applies
             </label>
 
             <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
@@ -1163,9 +1210,6 @@ export default function MigrationView() {
                   "";
                 const effectiveKey =
                   supabaseKey ?? migration.supabase_anon_key ?? "";
-                const connectUrl = effectiveProjectId
-                  ? `https://supabase.com/dashboard/project/${effectiveProjectId}?showConnect=true&connectTab=direct`
-                  : "";
                 const anonKeyUrl = effectiveProjectId
                   ? `https://supabase.com/dashboard/project/${effectiveProjectId}/settings/api-keys/legacy`
                   : "";
@@ -1182,11 +1226,11 @@ export default function MigrationView() {
                           ${(totalCents / 100).toFixed(2)}
                         </p>
                         <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
-                          <p>$35.00 base fee (incl. database schema)</p>
+                          <p>$30.00 base fee (incl. database schema)</p>
                           <p>
                             $
                             {(
-                              (migration.estimated_cost_cents - 3500) /
+                              (migration.estimated_cost_cents - 3000) /
                               100
                             ).toFixed(2)}{" "}
                             token usage (~
@@ -1376,7 +1420,7 @@ export default function MigrationView() {
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="estimate-supabase-conn">
-                              Database connection string{" "}
+                              Database password{" "}
                               <span className="font-normal text-muted-foreground">
                                 (optional)
                               </span>
@@ -1385,38 +1429,42 @@ export default function MigrationView() {
                               id="estimate-supabase-conn"
                               type="password"
                               autoComplete="off"
-                              placeholder="postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres"
-                              value={dbConnString}
-                              onChange={(e) => setDbConnString(e.target.value)}
-                              className="font-mono text-xs bg-white"
+                              placeholder="Your Supabase database password"
+                              value={dbPassword}
+                              onChange={(e) => setDbPassword(e.target.value)}
+                              className="bg-white"
                             />
                             <p className="text-xs text-muted-foreground leading-relaxed">
                               Provide this and we&apos;ll{" "}
                               <strong>create your tables automatically</strong>{" "}
-                              when the migration finishes.{" "}
-                              {connectUrl ? (
+                              when the migration finishes. We build the
+                              connection string for you from your Project ID
+                              {effectiveProjectId ? (
                                 <>
+                                  {" "}
+                                  (
+                                  <code className="bg-muted px-1 rounded">
+                                    db.{effectiveProjectId}.supabase.co
+                                  </code>
+                                  )
+                                </>
+                              ) : null}{" "}
+                              — just enter your database password.{" "}
+                              {effectiveProjectId ? (
+                                <>
+                                  Forgot it? Reset it under{" "}
                                   <a
-                                    href={connectUrl}
+                                    href={`https://supabase.com/dashboard/project/${effectiveProjectId}/settings/database`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-primary hover:underline"
                                   >
-                                    Open the Connect dialog
-                                  </a>{" "}
-                                  and copy the{" "}
-                                  <strong>Direct connection</strong> URI (it
-                                  includes{" "}
-                                  <code className="bg-muted px-1 rounded">
-                                    [YOUR-PASSWORD]
-                                  </code>{" "}
-                                  — replace it with your database password).
+                                    Project Settings → Database
+                                  </a>
+                                  .
                                 </>
                               ) : (
-                                <>
-                                  Enter your Project ID above to get a direct
-                                  link to the connection string.
-                                </>
+                                <>Enter your Project ID above first.</>
                               )}{" "}
                               Stored encrypted.
                             </p>
@@ -1432,7 +1480,10 @@ export default function MigrationView() {
                                 skip it, you can add it on the next screen after
                                 the migration and we&apos;ll create the tables
                                 with one click &mdash; but the app won&apos;t
-                                run until that&apos;s done.
+                                run until that&apos;s done. Note: this builds
+                                your table structure, not your existing rows
+                                &mdash; we&apos;ll show you how to import your
+                                data afterward.
                               </p>
                             </div>
                           </div>
@@ -1870,12 +1921,10 @@ export default function MigrationView() {
       {(isCompleted || isReviewed) && !migration.output_repo_url && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-lg">
-              Push to GitHub (optional)
-            </CardTitle>
+            <CardTitle className="text-lg">Push to GitHub (optional)</CardTitle>
             <CardDescription>
-              For GitHub users &mdash; push the migrated code to a repo so Vercel
-              can auto-deploy on every push. Not required if you used the
+              For GitHub users &mdash; push the migrated code to a repo so
+              Vercel can auto-deploy on every push. Not required if you used the
               one-click deploy above.
             </CardDescription>
           </CardHeader>
@@ -2034,8 +2083,10 @@ export default function MigrationView() {
                     </span>
                   </label>
                   <span className="text-[11px] text-muted-foreground">
-                    Tip: <code>.env</code> files are hidden &mdash; on macOS press
-                    <kbd className="px-1">⌘</kbd>+<kbd className="px-1">⇧</kbd>+
+                    Tip: <code>.env</code> files are hidden &mdash; on macOS
+                    press
+                    <kbd className="px-1">⌘</kbd>+
+                    <kbd className="px-1">shift</kbd>+
                     <kbd className="px-1">.</kbd> in the picker, or just paste
                     above.
                   </span>

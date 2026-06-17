@@ -477,7 +477,7 @@ export function estimateTokens(content: string): {
   return { input: estimatedInputTokens, output: estimatedOutputTokens };
 }
 
-const BASE_FEE_CENTS = parseInt(process.env.BASE_FEE_CENTS || "3500"); // $35 per migration (includes database schema generation)
+const BASE_FEE_CENTS = parseInt(process.env.BASE_FEE_CENTS || "3000"); // $30 per migration (includes database schema generation)
 
 export function calculateCost(
   inputTokens: number,

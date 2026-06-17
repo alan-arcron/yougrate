@@ -87,8 +87,37 @@ function NotFound() {
   );
 }
 
+function MaintenanceScreen() {
+  const { signOut } = useAuth();
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+      <div className="text-center space-y-4 max-w-md px-6">
+        <img
+          src="/yougrate.png"
+          alt="Yougrate"
+          className="h-14 w-14 mx-auto mb-1"
+        />
+        <h1 className="text-2xl font-semibold">We&apos;re making improvements</h1>
+        <p className="text-muted-foreground">
+          Yougrate is undergoing maintenance right now. The dashboard is
+          temporarily unavailable &mdash; please check back soon.
+        </p>
+        <div className="flex items-center justify-center gap-3 pt-2">
+          <Button variant="outline" onClick={() => signOut()}>
+            Sign out
+          </Button>
+          <Button onClick={() => (window.location.href = "/")}>
+            Back to homepage
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { session, loading } = useAuth();
+  const { session, loading, underConstruction, profile, profileLoading } =
+    useAuth();
 
   if (loading) {
     return (
@@ -99,6 +128,20 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
   }
 
   if (!session) return <Navigate to="/login" />;
+
+  // Maintenance mode: admins still get in (their profile loads); everyone else
+  // is blocked at the server and never receives a profile.
+  if (underConstruction && !profile?.is_admin) {
+    if (profileLoading) {
+      return (
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="h-8 w-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
+      );
+    }
+    return <MaintenanceScreen />;
+  }
+
   return <AppShell>{children}</AppShell>;
 }
 

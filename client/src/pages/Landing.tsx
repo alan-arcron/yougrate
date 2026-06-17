@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -50,7 +51,7 @@ const FEATURES = [
     icon: Database,
     title: "Database Schema Included",
     description:
-      "Every migration generates your full Supabase schema — tables, relationships, indexes, and RLS policies — and can create them in your database for you. No add-on, no extra fee.",
+      "Every migration generates your full Supabase schema — tables, relationships, indexes, and RLS policies — and can create them in your database for you. No add-on, no extra fee. (Importing your existing rows is a quick separate step we guide you through.)",
   },
   {
     icon: Wrench,
@@ -112,9 +113,17 @@ const STEPS = [
 
 export default function Landing() {
   const navigate = useNavigate();
+  const { underConstruction } = useAuth();
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {underConstruction && (
+        <div className="bg-amber-500 text-amber-950 text-center py-2.5 px-4 text-sm font-medium">
+          🚧 We&apos;re currently making improvements to Yougrate. Sign-ups and
+          the dashboard are temporarily paused — please check back soon.
+        </div>
+      )}
+
       {/* Promo banner */}
       <div className="bg-primary text-primary-foreground text-center py-2 px-4 text-sm">
         Summer promo: use code{" "}
@@ -172,9 +181,9 @@ export default function Landing() {
             <span className="text-primary">Own it.</span>
           </h1>
           <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            Migrate your vibe-coded apps &mdash; code and database &mdash; off
-            Lovable, Base44, and other platforms to Vercel and Supabase in
-            minutes. One click. Full ownership.
+            Migrate your vibe-coded apps &mdash; code and database schema
+            &mdash; off Lovable, Base44, and other platforms to Vercel and
+            Supabase in minutes. One click. Full ownership.
           </p>
           <div className="mt-10 flex items-center justify-center gap-4">
             <Button
@@ -258,7 +267,7 @@ export default function Landing() {
                 <CardDescription className="text-primary font-medium uppercase tracking-wider text-xs">
                   Migrate with Yougrate
                 </CardDescription>
-                <CardTitle className="text-2xl">One-time from $35</CardTitle>
+                <CardTitle className="text-2xl">One-time from $30</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 {[
@@ -477,10 +486,10 @@ export default function Landing() {
                     <Logo className="h-5 w-5" />
                     <span className="font-medium">Migration</span>
                   </div>
-                  <span className="font-bold">$35 base + token usage</span>
+                  <span className="font-bold">$30 base + token usage</span>
                 </div>
                 <p className="text-xs text-muted-foreground px-4 -mt-1">
-                  $35 flat fee covers overhead and full database schema
+                  $30 flat fee covers overhead and full database schema
                   generation (tables, RLS, indexes). Additional cost scales with
                   your codebase size based on AI tokens consumed. You see the
                   exact price before confirming.

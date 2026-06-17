@@ -367,7 +367,7 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
   // What the customer is charged: base fee + billed AI token usage (already
   // included in estimated_cost_cents) + any add-ons. estimated_cost_cents from
   // calculateCost() = token cost (with markup) + base fee.
-  const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "3500");
+  const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "3000");
   const addonCodeReviewCents = migration.addon_code_review
     ? parseInt(process.env.ADDON_CODE_REVIEW_CENTS || "7500")
     : 0;

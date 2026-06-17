@@ -10,7 +10,7 @@ import {
 import { GithubIcon } from "@/components/icons";
 
 export default function Login() {
-  const { signInWithGitHub } = useAuth();
+  const { signInWithGitHub, underConstruction } = useAuth();
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -53,6 +53,12 @@ export default function Login() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {underConstruction && (
+              <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                🚧 Yougrate is undergoing maintenance right now. New sign-ins
+                are temporarily paused — please check back soon.
+              </div>
+            )}
             <Button
               onClick={signInWithGitHub}
               variant="outline"

@@ -66,7 +66,7 @@ export async function createCheckoutForMigration(
   const s = getStripe();
   const customerId = await getOrCreateCustomer(userId, email);
 
-  const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "3500");
+  const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "3000");
   const tokenCostCents = Math.max(0, estimatedCostCents - baseFeeCents);
 
   //@ts-ignore
