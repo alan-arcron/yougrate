@@ -2025,7 +2025,6 @@ export default function MigrationView() {
                   <label className="inline-flex">
                     <input
                       type="file"
-                      accept=".env,.txt,text/plain"
                       onChange={handleEnvFile}
                       className="hidden"
                     />
@@ -2034,6 +2033,12 @@ export default function MigrationView() {
                       Choose .env file
                     </span>
                   </label>
+                  <span className="text-[11px] text-muted-foreground">
+                    Tip: <code>.env</code> files are hidden &mdash; on macOS press
+                    <kbd className="px-1">⌘</kbd>+<kbd className="px-1">⇧</kbd>+
+                    <kbd className="px-1">.</kbd> in the picker, or just paste
+                    above.
+                  </span>
                   <Button
                     size="sm"
                     onClick={handlePushEnv}
@@ -2219,7 +2224,6 @@ export default function MigrationView() {
                     <label className="inline-flex">
                       <input
                         type="file"
-                        accept=".env,.txt,text/plain"
                         onChange={handleRailwayEnvFile}
                         className="hidden"
                       />
