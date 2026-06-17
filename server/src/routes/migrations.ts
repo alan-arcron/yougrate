@@ -9,6 +9,7 @@ import {
   runMigration,
   pushMigratedCode,
   runBuildFixLoop,
+  runDirectDeploy,
   isSecretFile,
 } from "../services/migrator";
 import {
@@ -624,6 +625,45 @@ router.post(
         .update({ status: "migrated" });
       res.status(500).json({ error: message });
     }
+  },
+);
+
+// Git-less deploy: upload the migrated files straight to Vercel. Works with
+// just the user's Vercel token — no GitHub repo, GitHub App, or login
+// connection required. Intended for non-technical users who don't use GitHub.
+router.post(
+  "/:id/deploy-direct",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const owned = await getOwnedMigration(req.params.id, req.userId);
+    if (!owned) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { migration, project } = owned;
+
+    if (!["completed", "reviewed", "deployed"].includes(migration.status)) {
+      res.status(400).json({ error: "Migration must be completed first" });
+      return;
+    }
+
+    const user = await db("users").where({ id: req.userId }).first();
+    if (!user?.vercel_access_token) {
+      res.status(400).json({ error: "Vercel not connected" });
+      return;
+    }
+
+    await db("migrations").where({ id: migration.id }).update({
+      status: "building",
+      error_message: null,
+    });
+    await db("projects").where({ id: project.id }).update({ status: "deploying" });
+
+    runDirectDeploy(migration.id).catch((err) => {
+      console.error("[deploy-direct] Error:", err);
+    });
+
+    res.json({ status: "deploying" });
   },
 );
 

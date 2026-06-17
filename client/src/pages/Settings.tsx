@@ -352,23 +352,49 @@ export default function Settings() {
                   team/workspace won&apos;t work, since we deploy to your
                   personal account.
                 </p>
-                <div className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
-                  First time deploying? Vercel also needs its GitHub App
-                  installed on your personal GitHub account so it can link your
-                  repo. Install it at{" "}
-                  <a
-                    href="https://github.com/apps/vercel"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline font-medium"
-                  >
-                    github.com/apps/vercel
-                  </a>{" "}
-                  and choose{" "}
-                  <span className="font-medium">All repositories</span> when
-                  granting access &mdash; we often push the migrated code to a{" "}
-                  <span className="font-medium">new</span> repo, so limiting it
-                  to a single repo can block the deploy.
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200 space-y-2">
+                  <p className="font-medium">
+                    Want auto-deploy when you push to GitHub? (optional)
+                  </p>
+                  <p>
+                    If you connect Vercel to GitHub, Vercel will automatically
+                    rebuild your site every time new changes are pushed to the
+                    repo. To set this up:
+                  </p>
+                  <ol className="list-decimal pl-4 space-y-1">
+                    <li>
+                      Connect your GitHub login to Vercel at{" "}
+                      <a
+                        href="https://vercel.com/account/settings/authentication"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline font-medium"
+                      >
+                        vercel.com/account/settings/authentication
+                      </a>
+                      . Use the <span className="font-medium">same</span> GitHub
+                      account that owns the migrated repo.
+                    </li>
+                    <li>
+                      Install the Vercel GitHub App at{" "}
+                      <a
+                        href="https://github.com/apps/vercel"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline font-medium"
+                      >
+                        github.com/apps/vercel
+                      </a>{" "}
+                      and choose{" "}
+                      <span className="font-medium">All repositories</span> (we
+                      often push to a <span className="font-medium">new</span>{" "}
+                      repo, so limiting it to one can block the link).
+                    </li>
+                  </ol>
+                  <p>
+                    Not using GitHub? No problem &mdash; you can deploy directly
+                    from your migration page with one click, no GitHub required.
+                  </p>
                 </div>
               </div>
               <Button

@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 const VERCEL_API = "https://api.vercel.com";
 
 interface VercelProject {
@@ -27,8 +29,9 @@ export function vercelErrorMessage(
   const message = typeof e.message === "string" ? e.message : "";
   const link = typeof e.link === "string" ? e.link : "";
 
-  // The Vercel GitHub App isn't installed on the user's account, so Vercel
-  // can't link the repository. This is fixable by the user in ~30 seconds.
+  // The Vercel GitHub App isn't installed / GitHub isn't connected to the
+  // Vercel account, so Vercel can't link the repository. This is fixable by the
+  // user in a minute — or they can just use the no-GitHub direct deploy.
   if (
     /install the GitHub integration|GitHub App|Install GitHub App/i.test(
       message,
@@ -36,9 +39,10 @@ export function vercelErrorMessage(
     (code === "bad_request" && /github/i.test(message))
   ) {
     return (
-      "Vercel can't connect to your GitHub repository because the Vercel GitHub App isn't installed on your account yet. " +
-      "Install it at https://github.com/apps/vercel and grant it access to this repository, then click Retry. " +
-      "If the repo is private, make sure Vercel has access to it."
+      "Vercel couldn't connect to your GitHub repository. Two things must be set up on Vercel: " +
+      "(1) connect your GitHub login at https://vercel.com/account/settings/authentication using the same GitHub account that owns the repo, and " +
+      "(2) install the Vercel GitHub App at https://github.com/apps/vercel with access to all repositories. " +
+      "Or skip GitHub entirely and use \"Deploy directly to Vercel\" — no GitHub required."
     );
   }
 
@@ -237,6 +241,115 @@ export async function upsertEnvVars(
   }
 
   return entries.map(([key]) => key);
+}
+
+/**
+ * Ensure a Vercel project exists WITHOUT linking a Git repository. Used by the
+ * direct (Git-less) deploy path, so it works with just the API token — no
+ * GitHub App, login connection, or repo access required. Returns the project.
+ */
+export async function ensureProject(
+  token: string,
+  name: string,
+  framework?: string | null,
+): Promise<VercelProject> {
+  const existing = await getProject(token, name);
+  if (existing) return existing;
+
+  const body: Record<string, unknown> = { name };
+  if (framework) body.framework = framework;
+
+  const res = await vercelFetch(token, "/v10/projects", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = (await res.json()) as Record<string, unknown>;
+    throw new Error(
+      vercelErrorMessage(err, `Vercel API error: ${JSON.stringify(err)}`),
+    );
+  }
+  return (await res.json()) as VercelProject;
+}
+
+export interface DeploymentFile {
+  file: string;
+  sha: string;
+  size: number;
+}
+
+/**
+ * Upload a single file's bytes to Vercel's file store, keyed by its SHA1 digest
+ * (idempotent — re-uploading the same content is a no-op on Vercel's side).
+ * Returns the sha/size needed to reference it in a file deployment.
+ */
+export async function uploadDeploymentFile(
+  token: string,
+  content: Buffer,
+): Promise<{ sha: string; size: number }> {
+  const sha = crypto.createHash("sha1").update(content).digest("hex");
+  const size = content.length;
+
+  const res = await fetch(`${VERCEL_API}/v2/files`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/octet-stream",
+      "x-vercel-digest": sha,
+    },
+    body: content,
+  });
+
+  // 200 = uploaded, 409 = already exists — both are fine for our purposes.
+  if (!res.ok && res.status !== 409) {
+    const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new Error(
+      vercelErrorMessage(err, `Vercel file upload error: ${JSON.stringify(err)}`),
+    );
+  }
+
+  return { sha, size };
+}
+
+/**
+ * Create a deployment from previously-uploaded files (no Git source). This is
+ * how the Vercel CLI deploys, and it requires no GitHub connection whatsoever.
+ */
+export async function createFileDeployment(
+  token: string,
+  projectName: string,
+  files: DeploymentFile[],
+  opts: { framework?: string | null; target?: string } = {},
+): Promise<{ id: string; url: string; readyState: string }> {
+  const body = {
+    name: projectName,
+    files: files.map((f) => ({ file: f.file, sha: f.sha, size: f.size })),
+    projectSettings: { framework: opts.framework ?? null },
+    target: opts.target ?? "production",
+  };
+
+  const res = await vercelFetch(
+    token,
+    "/v13/deployments?skipAutoDetectionConfirmation=1",
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+
+  if (!res.ok) {
+    const err = (await res.json()) as Record<string, unknown>;
+    throw new Error(
+      vercelErrorMessage(err, `Vercel deploy error: ${JSON.stringify(err)}`),
+    );
+  }
+
+  const data = (await res.json()) as {
+    id: string;
+    url: string;
+    readyState: string;
+  };
+  return { id: data.id, url: data.url, readyState: data.readyState };
 }
 
 export async function getLatestDeployment(

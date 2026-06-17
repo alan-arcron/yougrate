@@ -923,9 +923,145 @@ export async function pushMigratedCode(
 
 const MAX_BUILD_FIX_ATTEMPTS = 3;
 
+/**
+ * Rebuild the deployable output tree from S3: the original source files with the
+ * `migrated/` overlay layered on top (overlay wins), with committed secret files
+ * stripped out. Returns a map of output path -> relative S3 key.
+ */
+async function reconstructOutputMap(
+  projectId: string,
+  migrationId: string,
+): Promise<Map<string, string>> {
+  const prefix = s3.getWorkspacePrefix(projectId, migrationId);
+  const keys = await s3.listFiles(prefix);
+
+  const outputMap = new Map<string, string>();
+  for (const rel of keys) {
+    if (rel.startsWith("migrated/")) continue;
+    outputMap.set(rel, rel);
+  }
+  for (const rel of keys) {
+    if (!rel.startsWith("migrated/")) continue;
+    const outPath = rel.slice("migrated/".length);
+    if (outPath) outputMap.set(outPath, rel);
+  }
+  for (const outPath of [...outputMap.keys()]) {
+    // Never deploy committed secrets, build artifacts, or VCS/dep dirs.
+    if (
+      isSecretFile(outPath) ||
+      outPath.startsWith(".git/") ||
+      outPath.startsWith("node_modules/")
+    ) {
+      outputMap.delete(outPath);
+    }
+  }
+  return outputMap;
+}
+
+/**
+ * Reconstruct the output tree from S3, upload every file to Vercel, and create a
+ * Git-less file deployment. Returns the new deployment's id/url/state.
+ */
+async function deployReconstructedFiles(
+  token: string,
+  projectName: string,
+  projectId: string,
+  migrationId: string,
+): Promise<{ id: string; url: string; readyState: string }> {
+  const prefix = s3.getWorkspacePrefix(projectId, migrationId);
+  const outputMap = await reconstructOutputMap(projectId, migrationId);
+  if (outputMap.size === 0) {
+    throw new Error("No deployable files were found for this migration.");
+  }
+
+  const entries = [...outputMap.entries()];
+  const files: vercel.DeploymentFile[] = [];
+
+  // Upload with a small concurrency pool to keep it quick but gentle.
+  const CONCURRENCY = 8;
+  for (let i = 0; i < entries.length; i += CONCURRENCY) {
+    const batch = entries.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async ([outPath, relKey]) => {
+        const buf = await s3.downloadBuffer(`${prefix}/${relKey}`);
+        const { sha, size } = await vercel.uploadDeploymentFile(token, buf);
+        return { file: outPath, sha, size };
+      }),
+    );
+    files.push(...results);
+  }
+
+  return vercel.createFileDeployment(token, projectName, files, {
+    framework: null,
+  });
+}
+
+/**
+ * Deploy a migration to Vercel WITHOUT GitHub: uploads the migrated files
+ * directly to Vercel. Works with just the user's Vercel token — no GitHub App,
+ * login connection, or repo required.
+ */
+export async function runDirectDeploy(migrationId: string): Promise<void> {
+  const migration = await db("migrations").where({ id: migrationId }).first();
+  if (!migration) throw new Error("Migration not found");
+
+  const project = await db("projects")
+    .where({ id: migration.project_id })
+    .first();
+  if (!project) throw new Error("Project not found");
+
+  const user = await db("users").where({ id: project.user_id }).first();
+  if (!user?.vercel_access_token) throw new Error("Vercel not connected");
+
+  try {
+    await updateMigration(migrationId, { status: "building" });
+    await db("projects").where({ id: project.id }).update({ status: "deploying" });
+
+    const token = decryptSecret(user.vercel_access_token);
+
+    await log(
+      migrationId,
+      "Preparing a direct deploy to Vercel (no GitHub needed)...",
+    );
+    await vercel.ensureProject(token, project.name, null);
+
+    // Seed the standard Supabase env vars under both common prefixes so the
+    // build picks them up whether the app is Vite- or Next-based.
+    await vercel.upsertEnvVars(token, project.name, {
+      VITE_SUPABASE_URL: project.supabase_url || "",
+      VITE_SUPABASE_ANON_KEY: project.supabase_anon_key || "",
+      NEXT_PUBLIC_SUPABASE_URL: project.supabase_url || "",
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: project.supabase_anon_key || "",
+    });
+
+    await log(migrationId, "Uploading files to Vercel...");
+    const deployment = await deployReconstructedFiles(
+      token,
+      project.name,
+      project.id,
+      migrationId,
+    );
+    await log(
+      migrationId,
+      `Deployment created (${deployment.id.slice(0, 8)}). Building...`,
+    );
+
+    await runBuildFixLoop(migrationId, deployment.id, "direct");
+  } catch (err: unknown) {
+    const message = (await describeAiError(err)) ?? friendlyError(err);
+    await updateMigration(migrationId, {
+      status: "failed",
+      error_message: message,
+    });
+    await db("projects").where({ id: project.id }).update({ status: "failed" });
+    await log(migrationId, `Direct deploy failed: ${message}`, "error");
+  }
+}
+
 export async function runBuildFixLoop(
   migrationId: string,
   deploymentId: string,
+  mode: "git" | "direct" = "git",
 ): Promise<void> {
   const migration = await db("migrations").where({ id: migrationId }).first();
   if (!migration) throw new Error("Migration not found");
@@ -936,8 +1072,11 @@ export async function runBuildFixLoop(
   if (!project) throw new Error("Project not found");
 
   const user = await db("users").where({ id: project.user_id }).first();
-  if (!user?.vercel_access_token || !user?.github_access_token) {
-    throw new Error("Vercel or GitHub not connected");
+  if (!user?.vercel_access_token) {
+    throw new Error("Vercel not connected");
+  }
+  if (mode === "git" && !user?.github_access_token) {
+    throw new Error("GitHub not connected");
   }
 
   try {
@@ -1117,6 +1256,26 @@ export async function runBuildFixLoop(
           await s3.uploadFile(`${s3Prefix}/migrated/${filePath}`, content);
         }
 
+        await updateMigration(migrationId, { status: "building" });
+
+        if (mode === "direct") {
+          // Git-less redeploy: re-upload the (now-fixed) files straight to
+          // Vercel. No clone/push, no waiting for Vercel to notice a commit.
+          await log(migrationId, `Re-uploading fixed files to Vercel...`);
+          const redeploy = await deployReconstructedFiles(
+            decryptSecret(user.vercel_access_token),
+            project.name,
+            project.id,
+            migrationId,
+          );
+          currentDeploymentId = redeploy.id;
+          await log(
+            migrationId,
+            `New deployment created (${redeploy.id.slice(0, 8)})`,
+          );
+          continue;
+        }
+
         await log(migrationId, `Pushing fixes to GitHub...`);
         const repoFullName = migration.output_repo_url.replace(
           "https://github.com/",
@@ -1148,8 +1307,6 @@ export async function runBuildFixLoop(
 
         await fs.rm(localPath, { recursive: true, force: true });
         await log(migrationId, `Fixes pushed. Triggering new Vercel build...`);
-
-        await updateMigration(migrationId, { status: "building" });
 
         await new Promise((r) => setTimeout(r, 15_000));
         const latest = await vercel.getLatestDeployment(

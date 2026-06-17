@@ -239,9 +239,7 @@ function BackendBanner({
       <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
         <Zap className="h-4 w-4 mt-0.5 shrink-0 text-green-600" />
         <p className="leading-relaxed">
-          <span className="font-medium text-foreground">
-            Fully serverless.
-          </span>{" "}
+          <span className="font-medium text-foreground">Fully serverless.</span>{" "}
           This app talks directly to Supabase, so it deploys cleanly to Vercel +
           Supabase with no separate backend to host.
         </p>
@@ -263,8 +261,8 @@ function BackendBanner({
               ? `Detected ${fns.length} function(s): ${fns.join(", ")}. `
               : ""}
             These run as Supabase Edge Functions, not on Vercel. After your
-            migration you&apos;ll deploy them to your Supabase project (one-click
-            automation coming soon).
+            migration you&apos;ll deploy them to your Supabase project
+            (one-click automation coming soon).
           </p>
           <a
             href="https://supabase.com/docs/guides/functions/deploy"
@@ -281,7 +279,10 @@ function BackendBanner({
   }
 
   // type === "server"
-  const dir = details?.server_dir && details.server_dir !== "." ? details.server_dir : null;
+  const dir =
+    details?.server_dir && details.server_dir !== "."
+      ? details.server_dir
+      : null;
   return (
     <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800">
       <Server className="h-4 w-4 mt-0.5 shrink-0" />
@@ -313,7 +314,8 @@ function BackendBanner({
         </p>
         {details?.start_command ? (
           <p className="text-[11px]">
-            Start command: <code className="font-mono">{details.start_command}</code>
+            Start command:{" "}
+            <code className="font-mono">{details.start_command}</code>
           </p>
         ) : null}
       </div>
@@ -370,13 +372,16 @@ export default function MigrationView() {
   const [paying, setPaying] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [deploying, setDeploying] = useState(false);
+  const [deployingDirect, setDeployingDirect] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pollKey, setPollKey] = useState(0);
   const [repoName, setRepoName] = useState("");
   const [pushType, setPushType] = useState<"new" | "branch">("new");
   const [addonCodeReview, setAddonCodeReview] = useState(false);
   const [supabaseUrl, setSupabaseUrl] = useState<string | null>(null);
-  const [supabaseProjectId, setSupabaseProjectId] = useState<string | null>(null);
+  const [supabaseProjectId, setSupabaseProjectId] = useState<string | null>(
+    null,
+  );
   const [supabaseKey, setSupabaseKey] = useState<string | null>(null);
   const [monthlySpend, setMonthlySpend] = useState<string | null>(null);
   const [claudeSpend, setClaudeSpend] = useState("20");
@@ -747,9 +752,7 @@ export default function MigrationView() {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      setRailwayEnvText(
-        typeof reader.result === "string" ? reader.result : "",
-      );
+      setRailwayEnvText(typeof reader.result === "string" ? reader.result : "");
     };
     reader.readAsText(file);
     e.target.value = "";
@@ -768,6 +771,22 @@ export default function MigrationView() {
       fetchMigration();
     } finally {
       setDeploying(false);
+    }
+  }
+
+  async function handleDeployDirect() {
+    setDeployingDirect(true);
+    setActionError(null);
+    try {
+      await api.post(`/migrations/${migrationId}/deploy-direct`);
+      toast.success("Deploying to Vercel (no GitHub needed)...");
+      setPollKey((k) => k + 1);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setActionError(msg);
+      fetchMigration();
+    } finally {
+      setDeployingDirect(false);
     }
   }
 
@@ -911,7 +930,7 @@ export default function MigrationView() {
                     {schemaApplied
                       ? "Schema applied to your Supabase project."
                       : migration.has_db_url
-                        ? "We applied your schema automatically using your saved connection string — check the log for the result, or re-apply below."
+                        ? "We applied your schema automatically using your saved connection string — check the log for the result, or re-apply."
                         : "Add your Supabase connection string and we'll create the tables for you with one click."}
                   </p>
                 </div>
@@ -996,7 +1015,9 @@ export default function MigrationView() {
                       Open the Connect dialog
                     </a>{" "}
                     and copy the <strong>Direct connection</strong> URI (replace{" "}
-                    <code className="bg-muted px-1 rounded">[YOUR-PASSWORD]</code>{" "}
+                    <code className="bg-muted px-1 rounded">
+                      [YOUR-PASSWORD]
+                    </code>{" "}
                     with your database password).{" "}
                   </>
                 ) : (
@@ -1269,9 +1290,12 @@ export default function MigrationView() {
                             Project Settings &rarr; API Keys &rarr; Legacy anon,
                             service_role API keys
                           </strong>
-                          . Copy the <code className="bg-muted px-1 rounded">anon</code> key — it&apos;s
-                          public and safe to embed. The URL is on the{" "}
-                          <strong>Project Settings &rarr; Data API</strong> page.
+                          . Copy the{" "}
+                          <code className="bg-muted px-1 rounded">anon</code>{" "}
+                          key — it&apos;s public and safe to embed. The URL is
+                          on the{" "}
+                          <strong>Project Settings &rarr; Data API</strong>{" "}
+                          page.
                         </p>
                       </div>
                       <div className="space-y-2">
@@ -1318,91 +1342,100 @@ export default function MigrationView() {
                       </div>
                       {effectiveProjectId && (
                         <>
-                      <div className="space-y-2">
-                        <Label htmlFor="estimate-supabase-key">Anon Key</Label>
-                        <Input
-                          className="bg-white"
-                          id="estimate-supabase-key"
-                          placeholder="eyJhbGciOiJIUzI1NiIs..."
-                          value={effectiveKey}
-                          onChange={(e) => setSupabaseKey(e.target.value)}
-                        />
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          <a
-                            href={anonKeyUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:underline"
-                          >
-                            Open your API keys
-                          </a>{" "}
-                          and copy the{" "}
-                          <code className="bg-muted px-1 rounded">anon</code>{" "}
-                          /{" "}
-                          <code className="bg-muted px-1 rounded">public</code>{" "}
-                          key (under &ldquo;Legacy anon, service_role API
-                          keys&rdquo;). It&apos;s public and safe to embed.
-                        </p>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="estimate-supabase-conn">
-                          Database connection string{" "}
-                          <span className="font-normal text-muted-foreground">
-                            (optional)
-                          </span>
-                        </Label>
-                        <Input
-                          id="estimate-supabase-conn"
-                          type="password"
-                          autoComplete="off"
-                          placeholder="postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres"
-                          value={dbConnString}
-                          onChange={(e) => setDbConnString(e.target.value)}
-                          className="font-mono text-xs bg-white"
-                        />
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          Provide this and we&apos;ll{" "}
-                          <strong>create your tables automatically</strong> when
-                          the migration finishes.{" "}
-                          {connectUrl ? (
-                            <>
+                          <div className="space-y-2">
+                            <Label htmlFor="estimate-supabase-key">
+                              Anon Key
+                            </Label>
+                            <Input
+                              className="bg-white"
+                              id="estimate-supabase-key"
+                              placeholder="eyJhbGciOiJIUzI1NiIs..."
+                              value={effectiveKey}
+                              onChange={(e) => setSupabaseKey(e.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground leading-relaxed">
                               <a
-                                href={connectUrl}
+                                href={anonKeyUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-primary hover:underline"
                               >
-                                Open the Connect dialog
+                                Open your API keys
                               </a>{" "}
-                              and copy the <strong>Direct connection</strong>{" "}
-                              URI (it includes <code className="bg-muted px-1 rounded">
-                                [YOUR-PASSWORD]
+                              and copy the{" "}
+                              <code className="bg-muted px-1 rounded">
+                                anon
                               </code>{" "}
-                              — replace it with your database password).
-                            </>
-                          ) : (
-                            <>
-                              Enter your Project ID above to get a direct link to
-                              the connection string.
-                            </>
-                          )}{" "}
-                          Stored encrypted.
-                        </p>
-                        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
-                          <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                          <p className="leading-relaxed">
-                            <strong>
-                              Your tables must be created for the app to work.
-                            </strong>{" "}
-                            Easiest is to add the connection string now and
-                            we&apos;ll set everything up for you. If you skip
-                            it, you can add it on the next screen after the
-                            migration and we&apos;ll create the tables with one
-                            click &mdash; but the app won&apos;t run until
-                            that&apos;s done.
-                          </p>
-                        </div>
-                      </div>
+                              /{" "}
+                              <code className="bg-muted px-1 rounded">
+                                public
+                              </code>{" "}
+                              key (under &ldquo;Legacy anon, service_role API
+                              keys&rdquo;). It&apos;s public and safe to embed.
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="estimate-supabase-conn">
+                              Database connection string{" "}
+                              <span className="font-normal text-muted-foreground">
+                                (optional)
+                              </span>
+                            </Label>
+                            <Input
+                              id="estimate-supabase-conn"
+                              type="password"
+                              autoComplete="off"
+                              placeholder="postgresql://postgres:[password]@db.[ref].supabase.co:5432/postgres"
+                              value={dbConnString}
+                              onChange={(e) => setDbConnString(e.target.value)}
+                              className="font-mono text-xs bg-white"
+                            />
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              Provide this and we&apos;ll{" "}
+                              <strong>create your tables automatically</strong>{" "}
+                              when the migration finishes.{" "}
+                              {connectUrl ? (
+                                <>
+                                  <a
+                                    href={connectUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-primary hover:underline"
+                                  >
+                                    Open the Connect dialog
+                                  </a>{" "}
+                                  and copy the{" "}
+                                  <strong>Direct connection</strong> URI (it
+                                  includes{" "}
+                                  <code className="bg-muted px-1 rounded">
+                                    [YOUR-PASSWORD]
+                                  </code>{" "}
+                                  — replace it with your database password).
+                                </>
+                              ) : (
+                                <>
+                                  Enter your Project ID above to get a direct
+                                  link to the connection string.
+                                </>
+                              )}{" "}
+                              Stored encrypted.
+                            </p>
+                            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
+                              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                              <p className="leading-relaxed">
+                                <strong>
+                                  Your tables must be created for the app to
+                                  work.
+                                </strong>{" "}
+                                Easiest is to add the connection string now and
+                                we&apos;ll set everything up for you. If you
+                                skip it, you can add it on the next screen after
+                                the migration and we&apos;ll create the tables
+                                with one click &mdash; but the app won&apos;t
+                                run until that&apos;s done.
+                              </p>
+                            </div>
+                          </div>
                         </>
                       )}
                     </div>
@@ -1687,8 +1720,9 @@ export default function MigrationView() {
                 {migration.has_review_artifact && (
                   <div className="mt-3">
                     <p className="text-[11px] text-muted-foreground mb-2">
-                      The reviewer's updated version of your code — download it or
-                      push it to a <span className="font-mono">yougrate/reviewed</span>{" "}
+                      The reviewer's updated version of your code — download it
+                      or push it to a{" "}
+                      <span className="font-mono">yougrate/reviewed</span>{" "}
                       branch on your GitHub repo to diff and merge.
                     </p>
                     <div className="flex flex-wrap gap-2">
@@ -1779,12 +1813,70 @@ export default function MigrationView() {
       )}
 
       {/* Push migrated code */}
+      {(isCompleted || isReviewed || deployed) && !isBuilding && !isFixing && (
+        <Card className="mb-6 border-primary/30">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Rocket className="h-5 w-5" />
+              Deploy to Vercel
+            </CardTitle>
+            <CardDescription>
+              One click &mdash; no GitHub account required. We upload your
+              migrated app straight to Vercel using your connected Vercel token.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {!deployed ? (
+              <Button onClick={handleDeployDirect} disabled={deployingDirect}>
+                {deployingDirect ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Rocket className="mr-2 h-4 w-4" />
+                )}
+                {deployingDirect ? "Deploying..." : "Deploy to Vercel"}
+              </Button>
+            ) : (
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 text-green-600">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span className="text-sm font-medium">
+                    Deployed successfully
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDeployDirect}
+                  disabled={deployingDirect}
+                >
+                  {deployingDirect ? (
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Rocket className="mr-2 h-3 w-3" />
+                  )}
+                  {deployingDirect ? "Redeploying..." : "Redeploy"}
+                </Button>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Want Vercel to rebuild automatically every time you push code?
+              Push to GitHub below and connect Vercel to GitHub in Settings
+              (optional, for GitHub users).
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {(isCompleted || isReviewed) && !migration.output_repo_url && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-lg">Push Migrated Code</CardTitle>
+            <CardTitle className="text-lg">
+              Push to GitHub (optional)
+            </CardTitle>
             <CardDescription>
-              Choose where to push the migrated code
+              For GitHub users &mdash; push the migrated code to a repo so Vercel
+              can auto-deploy on every push. Not required if you used the
+              one-click deploy above.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1865,9 +1957,13 @@ export default function MigrationView() {
               </div>
             )}
             {!isBuilding && !isFixing && !deployed && (
-              <Button onClick={handleDeploy} disabled={deploying}>
+              <Button
+                variant="outline"
+                onClick={handleDeploy}
+                disabled={deploying}
+              >
                 <Rocket className="mr-2 h-4 w-4" />
-                {deploying ? "Deploying..." : "Deploy to Vercel"}
+                {deploying ? "Deploying..." : "Deploy from GitHub repo"}
               </Button>
             )}
             {deployed && (
@@ -1910,8 +2006,8 @@ export default function MigrationView() {
                 </CardTitle>
                 <CardDescription>
                   Paste your <code className="text-xs">.env</code> (or choose a
-                  file) to push every variable to Vercel at once. Values are sent
-                  straight to Vercel and are never stored by Yougrate.
+                  file) to push every variable to Vercel at once. Values are
+                  sent straight to Vercel and are never stored by Yougrate.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -1995,8 +2091,8 @@ export default function MigrationView() {
               Backend Server (Railway)
             </CardTitle>
             <CardDescription>
-              This app needs a long-running server, which Vercel can&apos;t host.
-              Deploy it to Railway
+              This app needs a long-running server, which Vercel can&apos;t
+              host. Deploy it to Railway
               {migration.backend_details?.server_dir &&
               migration.backend_details.server_dir !== "."
                 ? ` from ${migration.backend_details.server_dir}/`
@@ -2030,7 +2126,8 @@ export default function MigrationView() {
                       )
                     </>
                   ) : null}
-                  , generate a public URL, and wire it into your Vercel frontend.
+                  , generate a public URL, and wire it into your Vercel
+                  frontend.
                 </p>
                 {railwayGithubHelp && (
                   <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
@@ -2050,7 +2147,10 @@ export default function MigrationView() {
                     </p>
                   </div>
                 )}
-                <Button onClick={handleDeployRailway} disabled={deployingRailway}>
+                <Button
+                  onClick={handleDeployRailway}
+                  disabled={deployingRailway}
+                >
                   {deployingRailway ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
@@ -2065,7 +2165,9 @@ export default function MigrationView() {
               <>
                 <div className="flex items-center gap-2 text-sm text-green-600">
                   <CheckCircle2 className="h-4 w-4" />
-                  <span className="font-medium">Backend deployed to Railway</span>
+                  <span className="font-medium">
+                    Backend deployed to Railway
+                  </span>
                 </div>
                 {migration.railway_service_domain && (
                   <div>
@@ -2101,9 +2203,10 @@ export default function MigrationView() {
                     Backend environment variables
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Paste your server&apos;s <code className="text-xs">.env</code>{" "}
-                    to push it to the Railway service. Values go straight to
-                    Railway and are never stored by Yougrate.
+                    Paste your server&apos;s{" "}
+                    <code className="text-xs">.env</code> to push it to the
+                    Railway service. Values go straight to Railway and are never
+                    stored by Yougrate.
                   </p>
                   <textarea
                     value={railwayEnvText}
