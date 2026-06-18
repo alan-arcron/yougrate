@@ -21,14 +21,6 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   ArrowLeft,
   CheckCircle2,
   Clock,
@@ -362,16 +354,6 @@ function normalizeRef(input: string): string {
   return raw.replace(/[^a-zA-Z0-9]/g, "");
 }
 
-/**
- * Build the Supabase direct connection string from a project ref + DB password.
- * Supabase direct connections always follow this host pattern, so the user only
- * needs to supply their database password.
- */
-function buildDbConnString(ref: string, password: string): string {
-  if (!ref || !password) return "";
-  return `postgresql://postgres:${encodeURIComponent(password)}@db.${ref}.supabase.co:5432/postgres`;
-}
-
 export default function MigrationView() {
   const { profile } = useAuth();
   const { projectId, migrationId } = useParams();
@@ -395,8 +377,7 @@ export default function MigrationView() {
   const [supabaseKey, setSupabaseKey] = useState<string | null>(null);
   const [monthlySpend, setMonthlySpend] = useState<string | null>(null);
   const [claudeSpend, setClaudeSpend] = useState("20");
-  const [schemaDialogOpen, setSchemaDialogOpen] = useState(false);
-  const [dbPassword, setDbPassword] = useState("");
+  const [dbConnString, setDbConnString] = useState("");
   const [rememberDbConn, setRememberDbConn] = useState(false);
   const [applyingSchema, setApplyingSchema] = useState(false);
   const [schemaApplied, setSchemaApplied] = useState(false);
@@ -565,18 +546,12 @@ export default function MigrationView() {
       toast.error("Enter your Supabase URL and anon key before continuing.");
       return;
     }
-    const ref = (
-      supabaseProjectId ??
-      urlToRef(migration?.supabase_url) ??
-      ""
-    ).trim();
-    const conn = buildDbConnString(ref, dbPassword.trim());
     setPaying(true);
     try {
       await api.patch(`/projects/${projectId}/supabase`, {
         supabase_url: url,
         supabase_anon_key: key,
-        connection_string: conn || undefined,
+        connection_string: dbConnString.trim() || undefined,
       });
       const res = await api.post<{ checkout_url?: string; paid?: boolean }>(
         `/migrations/${migrationId}/confirm`,
@@ -615,24 +590,17 @@ export default function MigrationView() {
   }
 
   async function handleApplySchema() {
-    const ref = (
-      supabaseProjectId ??
-      urlToRef(migration?.supabase_url) ??
-      ""
-    ).trim();
-    const conn = buildDbConnString(ref, dbPassword.trim());
     setApplyingSchema(true);
     try {
       await api.post(`/migrations/${migrationId}/apply-schema`, {
-        connection_string: conn || undefined,
+        connection_string: dbConnString.trim() || undefined,
         save: rememberDbConn,
       });
       toast.success(
         "Tables created in your Supabase project! Next, import your existing data — see the note below.",
       );
       setSchemaApplied(true);
-      setSchemaDialogOpen(false);
-      setDbPassword("");
+      setDbConnString("");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(msg);
@@ -848,14 +816,6 @@ export default function MigrationView() {
     migration.files_to_migrate > 0 &&
     migration.files_migrated >= migration.files_to_migrate;
 
-  // Project ref used by the Apply-schema dialog. Editable there so users can
-  // correct a wrong/typo'd Project ID when re-applying the schema.
-  const dialogProjectRef = (
-    supabaseProjectId ??
-    urlToRef(migration.supabase_url) ??
-    ""
-  ).trim();
-
   return (
     <div className="max-w-4xl mx-auto px-6 py-10">
       <Button
@@ -955,59 +915,123 @@ export default function MigrationView() {
       {(isCompleted || isReviewed || migrationFinished) &&
         migration.addon_data_migration && (
         <Card className="mb-6">
-          <CardContent className="py-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Database className="h-5 w-5 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">
-                    {migration.has_db_url
-                      ? "Database Tables"
-                      : "Create Tables in Supabase"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {schemaApplied
-                      ? "Schema applied to your Supabase project."
-                      : migration.has_db_url
-                        ? "We applied your schema automatically using your saved connection string — check the log for the result, or re-apply."
-                        : "Add your Supabase connection string and we'll create the tables for you with one click."}
-                  </p>
-                </div>
+          <CardContent className="py-4 space-y-3">
+            <div className="flex items-center gap-3">
+              <Database className="h-5 w-5 text-muted-foreground shrink-0" />
+              <div>
+                <p className="text-sm font-medium">
+                  {schemaApplied || migration.has_db_url
+                    ? "Database Tables"
+                    : "Create Tables in Supabase"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {schemaApplied
+                    ? "Schema applied to your Supabase project. You can re-apply below if you change projects or connection."
+                    : migration.has_db_url
+                      ? "We applied your schema automatically using your saved connection string — re-apply below if needed."
+                      : "Paste your Session Pooler connection string and we'll create the tables for you with one click."}
+                </p>
               </div>
+            </div>
+
+            <label className="block">
+              <span className="text-sm font-medium">
+                Session Pooler connection string
+              </span>
+              <Input
+                type="password"
+                autoComplete="off"
+                placeholder="postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres"
+                value={dbConnString}
+                onChange={(e) => setDbConnString(e.target.value)}
+                className="mt-1 font-mono text-xs"
+              />
+              <span className="text-[11px] text-muted-foreground mt-1 block leading-relaxed">
+                {migration.has_db_url
+                  ? "Leave blank to reuse your saved connection, or paste a new one to override it. "
+                  : ""}
+                {urlToRef(migration.supabase_url) ? (
+                  <a
+                    href={`https://supabase.com/dashboard/project/${urlToRef(migration.supabase_url)}?showConnect=true`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Open the Connect dialog
+                  </a>
+                ) : (
+                  <span className="font-medium">Open Connect in Supabase</span>
+                )}
+                , choose <strong>Session pooler</strong>, copy the URI, and
+                replace{" "}
+                <code className="bg-muted px-1 rounded">[YOUR-PASSWORD]</code>{" "}
+                with your database password. Use the pooler (not the direct{" "}
+                <code className="bg-muted px-1 rounded">db.…</code> host) — it
+                connects over IPv4 so our servers can reach it. We send it over
+                TLS, use it once, and only store it if you check the box below.
+              </span>
+            </label>
+
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={rememberDbConn}
+                onChange={(e) => setRememberDbConn(e.target.checked)}
+                className="h-4 w-4 rounded border-border"
+              />
+              Remember this connection (encrypted) for re-applies
+            </label>
+
+            <div className="flex items-center gap-3">
               <Button
                 variant={
                   schemaApplied || migration.has_db_url ? "outline" : "default"
                 }
                 size="sm"
-                onClick={() => setSchemaDialogOpen(true)}
+                onClick={handleApplySchema}
+                disabled={applyingSchema}
               >
-                {schemaApplied ? (
-                  <>
-                    <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
-                    Applied
-                  </>
+                {applyingSchema ? (
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <>
-                    <Database className="mr-2 h-3.5 w-3.5" />
-                    {migration.has_db_url ? "Re-apply" : "Apply Schema"}
-                  </>
+                  <Database className="mr-2 h-3.5 w-3.5" />
                 )}
+                {applyingSchema
+                  ? "Applying..."
+                  : schemaApplied || migration.has_db_url
+                    ? "Re-apply"
+                    : "Apply Schema"}
               </Button>
+              {schemaApplied && (
+                <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-500">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Applied
+                </span>
+              )}
             </div>
+
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <p className="leading-relaxed">
+                Best run against a fresh/empty Supabase project. If a table
+                already exists, the run is rolled back and nothing is changed.
+              </p>
+            </div>
+
             {!schemaApplied && (
-              <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
+              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
                 <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <p className="leading-relaxed">
                   <strong>
                     Your app won&apos;t work until these tables are created.
                   </strong>{" "}
-                  Click <strong>Apply Schema</strong> above and paste your
-                  Supabase connection string — we&apos;ll set everything up
+                  Paste your Supabase connection string above and click{" "}
+                  <strong>Apply Schema</strong> — we&apos;ll set everything up
                   automatically. This is a required step.
                 </p>
               </div>
             )}
-            <div className="mt-3 flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-200">
+            <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-200">
               <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <p className="leading-relaxed">
                 <strong>This creates empty tables — your existing rows
@@ -1032,123 +1056,6 @@ export default function MigrationView() {
           </CardContent>
         </Card>
       )}
-
-      <Dialog open={schemaDialogOpen} onOpenChange={setSchemaDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Apply schema to Supabase</DialogTitle>
-            <DialogDescription>
-              This runs the AI-generated SQL against your Supabase database and
-              creates the tables, policies, and indexes (structure only — it
-              does not copy your existing rows). It executes DDL directly on
-              your database — review the generated{" "}
-              <code className="text-[11px]">
-                supabase/migrations/001_initial_schema.sql
-              </code>{" "}
-              first.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-3">
-            <label className="block">
-              <span className="text-sm font-medium">Supabase Project ID</span>
-              <Input
-                autoComplete="off"
-                placeholder="e.g. abcdefghijklmnop"
-                value={dialogProjectRef}
-                onChange={(e) => {
-                  const ref = normalizeRef(e.target.value);
-                  setSupabaseProjectId(ref);
-                  setSupabaseUrl(ref ? refToUrl(ref) : null);
-                }}
-                className="mt-1 font-mono text-xs"
-              />
-              <span className="text-[11px] text-muted-foreground mt-1 block leading-relaxed">
-                Double-check this is correct &mdash; the connection points at{" "}
-                {dialogProjectRef ? (
-                  <code className="bg-muted px-1 rounded">
-                    db.{dialogProjectRef}.supabase.co
-                  </code>
-                ) : (
-                  <span className="font-medium">your project</span>
-                )}
-                . You can correct it here if it&apos;s wrong.
-              </span>
-            </label>
-
-            <label className="block">
-              <span className="text-sm font-medium">Database password</span>
-              <Input
-                type="password"
-                autoComplete="off"
-                placeholder="Your Supabase database password"
-                value={dbPassword}
-                onChange={(e) => setDbPassword(e.target.value)}
-                className="mt-1"
-              />
-              <span className="text-[11px] text-muted-foreground mt-1 block leading-relaxed">
-                {migration.has_db_url
-                  ? "Leave blank to reuse your saved connection, or enter your password again to override it. "
-                  : ""}
-                We build the connection string for you from the Project ID above
-                — just enter your database password. Forgot it? Reset it under{" "}
-                {dialogProjectRef ? (
-                  <a
-                    href={`https://supabase.com/dashboard/project/${dialogProjectRef}/settings/database`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    Project Settings → Database
-                  </a>
-                ) : (
-                  <span className="font-medium">
-                    Project Settings → Database
-                  </span>
-                )}
-                . We send it over TLS, use it once, and only store it if you
-                check the box below.
-              </span>
-            </label>
-
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={rememberDbConn}
-                onChange={(e) => setRememberDbConn(e.target.checked)}
-                className="h-4 w-4 rounded border-border"
-              />
-              Remember this connection (encrypted) for re-applies
-            </label>
-
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
-              <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
-                Best run against a fresh/empty Supabase project. If a table
-                already exists, the run is rolled back and nothing is changed.
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setSchemaDialogOpen(false)}
-              disabled={applyingSchema}
-            >
-              Cancel
-            </Button>
-            <Button onClick={handleApplySchema} disabled={applyingSchema}>
-              {applyingSchema ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Database className="mr-2 h-4 w-4" />
-              )}
-              {applyingSchema ? "Applying..." : "Apply Schema"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Analysis results / cost estimate */}
       {(isEstimated || migration.detected_platform) && (
@@ -1453,7 +1360,7 @@ export default function MigrationView() {
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="estimate-supabase-conn">
-                              Database password{" "}
+                              Session Pooler connection string{" "}
                               <span className="font-normal text-muted-foreground">
                                 (optional)
                               </span>
@@ -1462,44 +1369,38 @@ export default function MigrationView() {
                               id="estimate-supabase-conn"
                               type="password"
                               autoComplete="off"
-                              placeholder="Your Supabase database password"
-                              value={dbPassword}
-                              onChange={(e) => setDbPassword(e.target.value)}
-                              className="bg-white"
+                              placeholder="postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres"
+                              value={dbConnString}
+                              onChange={(e) => setDbConnString(e.target.value)}
+                              className="bg-white font-mono text-xs"
                             />
                             <p className="text-xs text-muted-foreground leading-relaxed">
                               Provide this and we&apos;ll{" "}
                               <strong>create your tables automatically</strong>{" "}
-                              when the migration finishes. We build the
-                              connection string for you from your Project ID
+                              when the migration finishes.{" "}
                               {effectiveProjectId ? (
-                                <>
-                                  {" "}
-                                  (
-                                  <code className="bg-muted px-1 rounded">
-                                    db.{effectiveProjectId}.supabase.co
-                                  </code>
-                                  )
-                                </>
-                              ) : null}{" "}
-                              — just enter your database password.{" "}
-                              {effectiveProjectId ? (
-                                <>
-                                  Forgot it? Reset it under{" "}
-                                  <a
-                                    href={`https://supabase.com/dashboard/project/${effectiveProjectId}/settings/database`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-primary hover:underline"
-                                  >
-                                    Project Settings → Database
-                                  </a>
-                                  .
-                                </>
+                                <a
+                                  href={`https://supabase.com/dashboard/project/${effectiveProjectId}?showConnect=true`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-primary hover:underline"
+                                >
+                                  Open the Connect dialog
+                                </a>
                               ) : (
-                                <>Enter your Project ID above first.</>
-                              )}{" "}
-                              Stored encrypted.
+                                <>Enter your Project ID above first, then open
+                                Connect in Supabase</>
+                              )}
+                              , choose <strong>Session pooler</strong>, copy the
+                              URI, and replace{" "}
+                              <code className="bg-muted px-1 rounded">
+                                [YOUR-PASSWORD]
+                              </code>{" "}
+                              with your database password. Use the pooler (not
+                              the direct{" "}
+                              <code className="bg-muted px-1 rounded">db.…</code>{" "}
+                              host) so our servers can reach it over IPv4. Stored
+                              encrypted.
                             </p>
                             <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
                               <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
