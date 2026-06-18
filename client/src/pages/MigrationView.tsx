@@ -840,6 +840,22 @@ export default function MigrationView() {
     migration.status === "pending_review" || migration.status === "reviewing";
   const isFailed = migration.status === "failed";
 
+  // The migrated code (and generated schema) exist once every file has been
+  // processed. This stays true through later deploy attempts (building/fixing/
+  // failed), so deploy-related status changes don't hide post-migration tools
+  // like "Apply Schema".
+  const migrationFinished =
+    migration.files_to_migrate > 0 &&
+    migration.files_migrated >= migration.files_to_migrate;
+
+  // Project ref used by the Apply-schema dialog. Editable there so users can
+  // correct a wrong/typo'd Project ID when re-applying the schema.
+  const dialogProjectRef = (
+    supabaseProjectId ??
+    urlToRef(migration.supabase_url) ??
+    ""
+  ).trim();
+
   return (
     <div className="max-w-4xl mx-auto px-6 py-10">
       <Button
@@ -936,7 +952,8 @@ export default function MigrationView() {
         </div>
       )}
 
-      {(isCompleted || isReviewed) && migration.addon_data_migration && (
+      {(isCompleted || isReviewed || migrationFinished) &&
+        migration.addon_data_migration && (
         <Card className="mb-6">
           <CardContent className="py-4">
             <div className="flex items-center justify-between">
@@ -1034,6 +1051,32 @@ export default function MigrationView() {
 
           <div className="space-y-3">
             <label className="block">
+              <span className="text-sm font-medium">Supabase Project ID</span>
+              <Input
+                autoComplete="off"
+                placeholder="e.g. abcdefghijklmnop"
+                value={dialogProjectRef}
+                onChange={(e) => {
+                  const ref = normalizeRef(e.target.value);
+                  setSupabaseProjectId(ref);
+                  setSupabaseUrl(ref ? refToUrl(ref) : null);
+                }}
+                className="mt-1 font-mono text-xs"
+              />
+              <span className="text-[11px] text-muted-foreground mt-1 block leading-relaxed">
+                Double-check this is correct &mdash; the connection points at{" "}
+                {dialogProjectRef ? (
+                  <code className="bg-muted px-1 rounded">
+                    db.{dialogProjectRef}.supabase.co
+                  </code>
+                ) : (
+                  <span className="font-medium">your project</span>
+                )}
+                . You can correct it here if it&apos;s wrong.
+              </span>
+            </label>
+
+            <label className="block">
               <span className="text-sm font-medium">Database password</span>
               <Input
                 type="password"
@@ -1047,21 +1090,11 @@ export default function MigrationView() {
                 {migration.has_db_url
                   ? "Leave blank to reuse your saved connection, or enter your password again to override it. "
                   : ""}
-                We build the connection string for you from your Project ID
-                {urlToRef(migration.supabase_url) ? (
-                  <>
-                    {" "}
-                    (
-                    <code className="bg-muted px-1 rounded">
-                      db.{urlToRef(migration.supabase_url)}.supabase.co
-                    </code>
-                    )
-                  </>
-                ) : null}{" "}
+                We build the connection string for you from the Project ID above
                 — just enter your database password. Forgot it? Reset it under{" "}
-                {urlToRef(migration.supabase_url) ? (
+                {dialogProjectRef ? (
                   <a
-                    href={`https://supabase.com/dashboard/project/${urlToRef(migration.supabase_url)}/settings/database`}
+                    href={`https://supabase.com/dashboard/project/${dialogProjectRef}/settings/database`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-primary hover:underline"

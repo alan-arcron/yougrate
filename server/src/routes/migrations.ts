@@ -197,13 +197,19 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   // forever. In that case, reconcile against Vercel's real deployment status so
   // the result surfaces in ~1 minute instead of the user waiting indefinitely.
   const STALE_HEARTBEAT_MS = 60 * 1000;
+  // Absolute give-up window for a build we can't verify against Vercel (no
+  // deployment id, or Vercel unreachable). Only after this do we declare a
+  // timeout — we must never fail a deployment that Vercel still says is building.
+  const HARD_TIMEOUT_MS = 20 * 60 * 1000;
   if (
     (migration.status === "building" || migration.status === "fixing") &&
     migration.updated_at &&
     Date.now() - new Date(migration.updated_at).getTime() > STALE_HEARTBEAT_MS
   ) {
+    const ageMs = Date.now() - new Date(migration.updated_at).getTime();
     let newStatus: string | null = null;
     let newError: string | null = null;
+    let touchHeartbeat = false;
 
     const user = await db("users").where({ id: req.userId }).first();
     if (migration.deployment_id && user?.vercel_access_token) {
@@ -225,25 +231,47 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
           newStatus = "failed";
           newError =
             "The Vercel deployment failed. Open the project in Vercel to see the build logs, then try again \u2014 the one-click \"Deploy to Vercel\" button is the most reliable.";
+        } else {
+          // QUEUED / BUILDING / INITIALIZING — Vercel is still working on it.
+          // Keep it "building" and refresh the heartbeat so we re-check on the
+          // next poll instead of wrongly declaring failure.
+          touchHeartbeat = true;
         }
       } catch {
-        // Couldn't reach Vercel; fall through to the timeout result below.
+        // Transient inability to reach Vercel — don't fail the build over it.
+        // Only give up if we've blown the absolute timeout.
+        if (ageMs > HARD_TIMEOUT_MS) {
+          newStatus = "failed";
+          newError =
+            "The deployment stopped responding and timed out. Please try again.";
+        } else {
+          touchHeartbeat = true;
+        }
       }
-    }
-
-    if (!newStatus) {
+    } else if (ageMs > HARD_TIMEOUT_MS) {
+      // No deployment id to verify against and it's been stuck a long time.
       newStatus = "failed";
       newError =
         "The deployment stopped responding and timed out. Please try again.";
+    } else {
+      touchHeartbeat = true;
     }
 
-    await db("migrations").where({ id: migration.id }).update({
-      status: newStatus,
-      error_message: newError,
-      updated_at: new Date().toISOString(),
-    });
-    migration.status = newStatus;
-    migration.error_message = newError;
+    if (newStatus) {
+      await db("migrations").where({ id: migration.id }).update({
+        status: newStatus,
+        error_message: newError,
+        updated_at: new Date().toISOString(),
+      });
+      migration.status = newStatus;
+      migration.error_message = newError;
+    } else if (touchHeartbeat) {
+      const now = new Date().toISOString();
+      await db("migrations")
+        .where({ id: migration.id })
+        .update({ updated_at: now });
+      migration.updated_at = now;
+    }
   }
 
   const files = await db("migration_files")
