@@ -392,14 +392,21 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
 
   // What the customer is charged: base fee + billed AI token usage (already
   // included in estimated_cost_cents) + any add-ons. estimated_cost_cents from
-  // calculateCost() = token cost (with markup) + base fee.
+  // calculateCost() = token cost (with markup) + base fee, and is only populated
+  // once analysis produces an estimate. Before that there's nothing to show, so
+  // we flag it rather than rendering a misleading "$30 base + $0 tokens".
   const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "3000");
   const addonCodeReviewCents = migration.addon_code_review
     ? parseInt(process.env.ADDON_CODE_REVIEW_CENTS || "7500")
     : 0;
   const estimatedCostCents = migration.estimated_cost_cents || 0;
-  const tokenBilledCents = Math.max(0, estimatedCostCents - baseFeeCents);
-  const customerPriceCents = estimatedCostCents + addonCodeReviewCents;
+  const hasEstimate = estimatedCostCents > 0;
+  const tokenBilledCents = hasEstimate
+    ? Math.max(0, estimatedCostCents - baseFeeCents)
+    : 0;
+  const customerPriceCents = hasEstimate
+    ? estimatedCostCents + addonCodeReviewCents
+    : 0;
 
   res.json({
     ...migration,
@@ -411,10 +418,13 @@ router.get("/migrations/:id", async (req: AuthRequest, res: Response) => {
     revenue_cents: revenueCents,
     margin_cents: revenueCents - apiCost,
     customer_price: {
-      base_fee_cents: baseFeeCents,
+      estimated: hasEstimate,
+      base_fee_cents: hasEstimate ? baseFeeCents : 0,
       token_billed_cents: tokenBilledCents,
       addon_code_review_cents: addonCodeReviewCents,
       total_cents: customerPriceCents,
+      // What we've actually collected via Stripe so far (paid billing events).
+      charged_cents: revenueCents,
     },
     billing_events: billingEvents,
     files,

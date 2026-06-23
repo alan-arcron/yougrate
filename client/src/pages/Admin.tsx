@@ -170,10 +170,12 @@ interface MigrationDetail {
   revenue_cents: number;
   margin_cents: number;
   customer_price: {
+    estimated: boolean;
     base_fee_cents: number;
     token_billed_cents: number;
     addon_code_review_cents: number;
     total_cents: number;
+    charged_cents: number;
   };
   retry_count: number;
   error_message: string | null;
@@ -726,15 +728,23 @@ export default function Admin() {
 
                     {expandedUser === u.id && (
                       <div className="mt-3 pt-3 border-t space-y-2">
-                        <div className="grid grid-cols-3 gap-4 text-sm">
+                        <div className="grid grid-cols-2 gap-4 text-sm">
                           <div>
                             <p className="text-xs text-muted-foreground">
-                              Analyses
+                              Free analyses
                             </p>
                             <div className="flex items-center gap-2">
                               <p className="font-medium">
-                                {u.free_analyses_used} / {u.free_analyses_limit}
+                                {Math.max(
+                                  0,
+                                  u.free_analyses_limit - u.free_analyses_used,
+                                )}{" "}
+                                left
                               </p>
+                              <span className="text-xs text-muted-foreground">
+                                ({u.free_analyses_used} used of{" "}
+                                {u.free_analyses_limit})
+                              </span>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -760,67 +770,80 @@ export default function Admin() {
                         </div>
                         <Separator />
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          Projects
+                          Projects &amp; migrations
                         </p>
                         {userProjects.length === 0 ? (
                           <p className="text-xs text-muted-foreground">
                             No projects
                           </p>
                         ) : (
-                          <div className="space-y-2">
-                            {userProjects.map((p) => (
-                              <div
-                                key={p.id}
-                                className="flex items-center justify-between rounded border px-3 py-2 text-xs"
-                              >
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span className="font-medium truncate">{p.name}</span>
-                                  <span className="text-muted-foreground truncate">
-                                    {p.github_repo_full_name}
-                                  </span>
+                          <div className="space-y-3">
+                            {userProjects.map((p) => {
+                              const projMigrations = userMigrations.filter(
+                                (m) => m.project_id === p.id,
+                              );
+                              return (
+                              <div key={p.id} className="rounded-lg border">
+                                <div className="flex items-center justify-between gap-2 px-3 py-2 bg-muted/40 border-b">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="text-sm font-medium truncate">
+                                      {p.name}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground truncate">
+                                      {p.github_repo_full_name}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span className="text-[11px] text-muted-foreground">
+                                      {projMigrations.length}{" "}
+                                      {projMigrations.length === 1
+                                        ? "migration"
+                                        : "migrations"}
+                                    </span>
+                                    <Badge variant="outline" className="text-xs capitalize">
+                                      {p.status}
+                                    </Badge>
+                                    <Button
+                                      variant="destructive"
+                                      size="sm"
+                                      className="h-7 px-2 text-xs"
+                                      disabled={deletingProject === p.id}
+                                      onClick={() => deleteProject(p)}
+                                    >
+                                      {deletingProject === p.id ? (
+                                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <Trash2 className="mr-1.5 h-3 w-3" />
+                                      )}
+                                      Delete
+                                    </Button>
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <Badge variant="outline" className="text-xs capitalize">
-                                    {p.status}
-                                  </Badge>
-                                  <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    className="h-7 px-2 text-xs"
-                                    disabled={deletingProject === p.id}
-                                    onClick={() => deleteProject(p)}
-                                  >
-                                    {deletingProject === p.id ? (
-                                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <Trash2 className="mr-1.5 h-3 w-3" />
-                                    )}
-                                    Delete
-                                  </Button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <Separator />
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                          Migrations
-                        </p>
-                        {userMigrations.length === 0 ? (
-                          <p className="text-xs text-muted-foreground">
-                            No migrations
-                          </p>
-                        ) : (
-                          <div className="space-y-2">
-                            {userMigrations.map((m) => (
+                                {projMigrations.length === 0 ? (
+                                  <p className="text-xs text-muted-foreground px-3 py-3">
+                                    No migrations yet
+                                  </p>
+                                ) : (
+                                  <div className="space-y-2 p-2">
+                                    {projMigrations.map((m) => (
                               <div key={m.id} className="rounded border">
                                 <button
                                   onClick={() => toggleMigrationExpand(m.id)}
                                   className="w-full flex items-center justify-between text-xs px-3 py-2 hover:bg-muted/30 transition-colors text-left"
                                 >
                                   <div className="flex items-center gap-2 min-w-0">
-                                    <span className="font-medium">{m.project_name}</span>
-                                    <span className="text-muted-foreground">{m.github_repo_full_name}</span>
+                                    <span className="font-medium">
+                                      {new Date(m.created_at).toLocaleDateString()}
+                                    </span>
+                                    <span className="text-muted-foreground">
+                                      {new Date(m.created_at).toLocaleTimeString([], {
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })}
+                                    </span>
+                                    <span className="font-mono text-[10px] text-muted-foreground/70">
+                                      {m.id.slice(0, 8)}
+                                    </span>
                                   </div>
                                   <div className="flex items-center gap-2 shrink-0">
                                     {m.actual_cost_cents > 0 && (
@@ -867,42 +890,78 @@ export default function Admin() {
                                               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                                                 What the customer pays
                                               </p>
-                                              <p className="text-lg font-mono font-bold text-primary">
-                                                $
-                                                {(
-                                                  migrationDetail.customer_price
-                                                    .total_cents / 100
-                                                ).toFixed(2)}
-                                              </p>
-                                            </div>
-                                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground font-mono">
-                                              <span>
-                                                Base fee $
-                                                {(
-                                                  migrationDetail.customer_price
-                                                    .base_fee_cents / 100
-                                                ).toFixed(2)}
-                                              </span>
-                                              <span>
-                                                + AI tokens $
-                                                {(
-                                                  migrationDetail.customer_price
-                                                    .token_billed_cents / 100
-                                                ).toFixed(2)}
-                                              </span>
                                               {migrationDetail.customer_price
-                                                .addon_code_review_cents > 0 && (
-                                                <span>
-                                                  + Code review $
+                                                .estimated ? (
+                                                <p className="text-lg font-mono font-bold text-primary">
+                                                  $
                                                   {(
-                                                    migrationDetail
-                                                      .customer_price
-                                                      .addon_code_review_cents /
-                                                    100
+                                                    migrationDetail.customer_price
+                                                      .total_cents / 100
                                                   ).toFixed(2)}
-                                                </span>
+                                                </p>
+                                              ) : (
+                                                <Badge
+                                                  variant="secondary"
+                                                  className="text-[10px]"
+                                                >
+                                                  Not estimated yet
+                                                </Badge>
                                               )}
                                             </div>
+                                            {migrationDetail.customer_price
+                                              .estimated ? (
+                                              <>
+                                                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground font-mono">
+                                                  <span>
+                                                    Base fee $
+                                                    {(
+                                                      migrationDetail
+                                                        .customer_price
+                                                        .base_fee_cents / 100
+                                                    ).toFixed(2)}
+                                                  </span>
+                                                  <span>
+                                                    + AI tokens $
+                                                    {(
+                                                      migrationDetail
+                                                        .customer_price
+                                                        .token_billed_cents / 100
+                                                    ).toFixed(2)}
+                                                  </span>
+                                                  {migrationDetail.customer_price
+                                                    .addon_code_review_cents >
+                                                    0 && (
+                                                    <span>
+                                                      + Code review $
+                                                      {(
+                                                        migrationDetail
+                                                          .customer_price
+                                                          .addon_code_review_cents /
+                                                        100
+                                                      ).toFixed(2)}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <p className="text-[11px] text-muted-foreground mt-1.5">
+                                                  {migrationDetail.customer_price
+                                                    .charged_cents > 0
+                                                    ? `Collected so far: $${(
+                                                        migrationDetail
+                                                          .customer_price
+                                                          .charged_cents / 100
+                                                      ).toFixed(
+                                                        2,
+                                                      )} (quoted up front; this is the estimate they were charged)`
+                                                    : "Quoted estimate — not paid yet."}
+                                                </p>
+                                              </>
+                                            ) : (
+                                              <p className="text-xs text-muted-foreground">
+                                                Pricing appears once analysis
+                                                finishes and produces a token
+                                                estimate.
+                                              </p>
+                                            )}
                                           </div>
                                         )}
 
@@ -970,9 +1029,11 @@ export default function Admin() {
                                             <div className="bg-muted/50 rounded p-2">
                                               <p className="text-xs text-muted-foreground">Estimate Accuracy</p>
                                               <p className="text-xs font-mono">
-                                                {migrationDetail.estimated_input_tokens + migrationDetail.estimated_output_tokens > 0
-                                                  ? `${(((migrationDetail.actual_input_tokens + migrationDetail.actual_output_tokens) / (migrationDetail.estimated_input_tokens + migrationDetail.estimated_output_tokens)) * 100).toFixed(0)}%`
-                                                  : "N/A"}
+                                                {migrationDetail.actual_input_tokens + migrationDetail.actual_output_tokens === 0
+                                                  ? "Not run yet"
+                                                  : migrationDetail.estimated_input_tokens + migrationDetail.estimated_output_tokens > 0
+                                                    ? `${(((migrationDetail.actual_input_tokens + migrationDetail.actual_output_tokens) / (migrationDetail.estimated_input_tokens + migrationDetail.estimated_output_tokens)) * 100).toFixed(0)}% of estimate`
+                                                    : "N/A"}
                                               </p>
                                             </div>
                                           </div>
@@ -1137,6 +1198,11 @@ export default function Admin() {
                                 )}
                               </div>
                             ))}
+                                  </div>
+                                )}
+                              </div>
+                              );
+                            })}
                           </div>
                         )}
 
@@ -1200,9 +1266,8 @@ export default function Admin() {
                       <th className="px-3 py-2 text-left font-medium">Status</th>
                       <th className="px-3 py-2 text-left font-medium">Payment</th>
                       <th className="px-3 py-2 text-right font-medium">Tokens</th>
-                      <th className="px-3 py-2 text-right font-medium">API Cost</th>
                       <th className="px-3 py-2 text-right font-medium">Billed</th>
-                      <th className="px-3 py-2 text-right font-medium">Revenue</th>
+                      <th className="px-3 py-2 text-right font-medium">Total API Cost</th>
                       <th className="px-3 py-2 text-right font-medium">Margin</th>
                       <th className="px-3 py-2 text-right font-medium">Date</th>
                     </tr>
@@ -1237,14 +1302,11 @@ export default function Admin() {
                         <td className="px-3 py-2 text-right font-mono text-xs">
                           {((row.actual_input_tokens + row.actual_output_tokens) / 1000).toFixed(0)}k
                         </td>
-                        <td className="px-3 py-2 text-right font-mono text-xs text-orange-600">
-                          ${(row.raw_cost_cents / 100).toFixed(2)}
-                        </td>
                         <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
                           ${(row.actual_cost_cents / 100).toFixed(2)}
                         </td>
-                        <td className="px-3 py-2 text-right font-mono text-xs">
-                          ${(row.revenue_cents / 100).toFixed(2)}
+                        <td className="px-3 py-2 text-right font-mono text-xs text-orange-600">
+                          ${(row.raw_cost_cents / 100).toFixed(2)}
                         </td>
                         <td className={`px-3 py-2 text-right font-mono text-xs font-medium ${row.margin_cents >= 0 ? "text-green-600" : "text-red-600"}`}>
                           ${(row.margin_cents / 100).toFixed(2)}
@@ -1255,8 +1317,53 @@ export default function Admin() {
                       </tr>
                     ))}
                   </tbody>
+                  {costBreakdown.length > 0 && (
+                    <tfoot>
+                      <tr className="border-t-2 bg-muted/40 font-semibold">
+                        <td colSpan={4} className="px-3 py-2 text-xs text-muted-foreground">
+                          Totals ({costBreakdown.length} migrations)
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-xs">
+                          {(
+                            costBreakdown.reduce(
+                              (s, r) => s + r.actual_input_tokens + r.actual_output_tokens,
+                              0,
+                            ) / 1000
+                          ).toFixed(0)}
+                          k
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
+                          ${(costBreakdown.reduce((s, r) => s + r.actual_cost_cents, 0) / 100).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-xs text-orange-600">
+                          ${(costBreakdown.reduce((s, r) => s + r.raw_cost_cents, 0) / 100).toFixed(2)}
+                        </td>
+                        {(() => {
+                          const totalMargin = costBreakdown.reduce((s, r) => s + r.margin_cents, 0);
+                          const totalRevenue = costBreakdown.reduce((s, r) => s + r.revenue_cents, 0);
+                          const marginPct = totalRevenue > 0 ? (totalMargin / totalRevenue) * 100 : null;
+                          return (
+                            <>
+                              <td className={`px-3 py-2 text-right font-mono text-xs ${totalMargin >= 0 ? "text-green-600" : "text-red-600"}`}>
+                                ${(totalMargin / 100).toFixed(2)}
+                              </td>
+                              <td className={`px-3 py-2 text-right font-mono text-xs whitespace-nowrap ${marginPct === null ? "text-muted-foreground" : marginPct >= 0 ? "text-green-600" : "text-red-600"}`}>
+                                {marginPct === null ? "—" : `${marginPct.toFixed(0)}% margin`}
+                              </td>
+                            </>
+                          );
+                        })()}
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                <span className="font-medium">Total API Cost</span> is the full raw
+                Anthropic cost (analysis + migration run).{" "}
+                <span className="font-medium">Margin</span> = what the customer paid
+                − Total API Cost.
+              </p>
             </div>
           )}
         </TabsContent>
