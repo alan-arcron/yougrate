@@ -11,6 +11,11 @@ const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
 
+const REVIEWER_EMAILS = (process.env.REVIEWER_EMAILS || "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
 export interface AuthRequest extends Request {
   userId?: string;
   userEmail?: string;
@@ -18,6 +23,27 @@ export interface AuthRequest extends Request {
 
 export function isAdmin(email?: string): boolean {
   return !!email && ADMIN_EMAILS.includes(email.toLowerCase());
+}
+
+/**
+ * Reviewers can access the limited review workflow. Admins are a superset, so
+ * they're reviewers too.
+ */
+export function isReviewer(email?: string): boolean {
+  if (!email) return false;
+  return isAdmin(email) || REVIEWER_EMAILS.includes(email.toLowerCase());
+}
+
+export async function requireReviewer(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) {
+  if (!req.userEmail || !isReviewer(req.userEmail)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  next();
 }
 
 /**

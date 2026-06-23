@@ -125,6 +125,7 @@ export interface Migration {
   review_artifact_key: string | null;
   review_artifact_name: string | null;
   reviewed_at: string | null;
+  reviewed_by: string | null;
   deployment_id: string | null;
   started_at: string | null;
   completed_at: string | null;

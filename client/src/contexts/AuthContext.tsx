@@ -13,6 +13,7 @@ interface UserProfile {
   railway_connected: boolean;
   github_username: string | null;
   is_admin?: boolean;
+  is_reviewer?: boolean;
 }
 
 interface AuthContextType {

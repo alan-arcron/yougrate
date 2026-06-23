@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db";
 import { ANTHROPIC_PRICING } from "../types";
 import type { AuthRequest } from "../middleware/auth";
-import { requireAuth, requireAdmin } from "../middleware/auth";
+import { requireAuth, isAdmin, isReviewer } from "../middleware/auth";
 import { validateBody, validateQuery } from "../middleware/validate";
 import { getPresignedDownloadUrl } from "../services/s3";
 import * as s3 from "../services/s3";
@@ -72,7 +72,33 @@ const updateTicketSchema = z.object({
 
 const router = Router();
 
-router.use(requireAuth, requireAdmin);
+// Routes a (non-admin) reviewer is allowed to use. Everything else under
+// /api/admin is admin-only. Default-deny: anything not matched here is rejected
+// for reviewers, so adding new admin routes never accidentally exposes them.
+const REVIEWER_ALLOW: { method: string; pattern: RegExp }[] = [
+  { method: "GET", pattern: /^\/pending-reviews$/ },
+  { method: "GET", pattern: /^\/migrations\/[^/]+\/download$/ },
+  { method: "POST", pattern: /^\/migrations\/[^/]+\/review-upload-url$/ },
+  { method: "PATCH", pattern: /^\/migrations\/[^/]+\/review-status$/ },
+  { method: "PATCH", pattern: /^\/migrations\/[^/]+\/review$/ },
+];
+
+router.use(requireAuth, (req: AuthRequest, res: Response, next) => {
+  if (isAdmin(req.userEmail)) {
+    next();
+    return;
+  }
+  if (
+    isReviewer(req.userEmail) &&
+    REVIEWER_ALLOW.some(
+      (r) => r.method === req.method && r.pattern.test(req.path),
+    )
+  ) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Forbidden" });
+});
 
 router.get("/stats", async (_req: AuthRequest, res: Response) => {
   const [userCount] = await db("users").count("id as count");
@@ -502,11 +528,11 @@ const reviewStatusSchema = z.object({
   status: z.enum(["reviewing", "reviewed"]),
 }).strip();
 
-router.get("/pending-reviews", async (_req: AuthRequest, res: Response) => {
+router.get("/pending-reviews", async (req: AuthRequest, res: Response) => {
   const reviews = await db("migrations")
     .join("projects", "migrations.project_id", "projects.id")
     .join("users", "projects.user_id", "users.id")
-    .whereIn("migrations.status", ["pending_review", "reviewing"])
+    .whereIn("migrations.status", ["pending_review", "reviewing", "reviewed"])
     .select(
       "migrations.id",
       "migrations.project_id",
@@ -517,10 +543,26 @@ router.get("/pending-reviews", async (_req: AuthRequest, res: Response) => {
       "migrations.output_repo_url",
       "migrations.output_branch",
       "migrations.completed_at",
+      "migrations.review_notes",
+      "migrations.review_artifact_name",
+      "migrations.reviewed_at",
+      "migrations.reviewed_by",
       "projects.name as project_name",
       "users.email as user_email",
     )
+    // Not-yet-delivered work first (oldest first), then recently delivered.
+    .orderByRaw(
+      "case when migrations.status = 'reviewed' then 1 else 0 end asc",
+    )
     .orderBy("migrations.completed_at", "asc");
+
+  // Reviewers (non-admins) must not see customer identities.
+  if (!isAdmin(req.userEmail)) {
+    res.json(
+      reviews.map(({ user_email, ...rest }: Record<string, unknown>) => rest),
+    );
+    return;
+  }
 
   res.json(reviews);
 });
@@ -621,6 +663,7 @@ router.patch(
     const updates: Record<string, unknown> = {
       status: "reviewed",
       reviewed_at: new Date().toISOString(),
+      reviewed_by: req.userEmail || null,
       updated_at: new Date().toISOString(),
     };
     if (notes !== undefined) updates.review_notes = notes;

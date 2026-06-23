@@ -354,6 +354,57 @@ function normalizeRef(input: string): string {
   return raw.replace(/[^a-zA-Z0-9]/g, "");
 }
 
+/**
+ * Client-side sanity check for a pasted Supabase connection string, so users
+ * see a clear error BEFORE paying instead of a cryptic failure when we try to
+ * apply the schema. Returns an error message, or null if it's empty (optional)
+ * or looks valid. Mirrors the server's validateSupabaseConnectionString.
+ */
+function validateConnString(raw: string): string | null {
+  const s = raw.trim();
+  if (!s) return null; // optional — they can add it later
+  if (/\[YOUR-PASSWORD\]|<password>|\[password\]|YOUR-PASSWORD/i.test(s)) {
+    return "Replace [YOUR-PASSWORD] with your actual database password.";
+  }
+  let url: URL;
+  try {
+    url = new URL(s);
+  } catch {
+    return "That doesn't look like a valid connection string — it should start with postgresql:// and come from Supabase's Connect dialog.";
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    return "Connection string must start with postgresql://";
+  }
+  const host = url.hostname.toLowerCase();
+  if (!(host.endsWith(".supabase.co") || host.endsWith(".supabase.com"))) {
+    return "Use your Supabase database host (ends in .supabase.com). Copy the Session pooler URI from the Connect dialog.";
+  }
+  if (!url.password) {
+    return "Your connection string is missing the password (postgres.<ref>:<password>@…).";
+  }
+  return null;
+}
+
+/**
+ * Non-blocking heads-up for the IPv6-only direct host, which won't connect from
+ * our servers. Returns a warning message, or null.
+ */
+function connStringWarning(raw: string): string | null {
+  const s = raw.trim();
+  if (!s) return null;
+  let url: URL;
+  try {
+    url = new URL(s);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host.startsWith("db.") && host.endsWith(".supabase.co")) {
+    return "This is the direct connection (IPv6-only) — it usually can't be reached from our servers. Use the Session pooler URI instead (aws-…pooler.supabase.com).";
+  }
+  return null;
+}
+
 export default function MigrationView() {
   const { profile } = useAuth();
   const { projectId, migrationId } = useParams();
@@ -544,6 +595,11 @@ export default function MigrationView() {
     const key = (supabaseKey ?? migration?.supabase_anon_key ?? "").trim();
     if (!url || !key) {
       toast.error("Enter your Supabase URL and anon key before continuing.");
+      return;
+    }
+    const connErr = validateConnString(dbConnString);
+    if (connErr) {
+      toast.error(connErr);
       return;
     }
     setPaying(true);
@@ -1155,6 +1211,10 @@ export default function MigrationView() {
                   : "";
                 const credsReady =
                   effectiveUrl.trim() !== "" && effectiveKey.trim() !== "";
+                const connError = validateConnString(dbConnString);
+                const connWarning = connError
+                  ? null
+                  : connStringWarning(dbConnString);
                 return (
                   <>
                     <Separator className="my-4" />
@@ -1372,8 +1432,24 @@ export default function MigrationView() {
                               placeholder="postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres"
                               value={dbConnString}
                               onChange={(e) => setDbConnString(e.target.value)}
-                              className="bg-white font-mono text-xs"
+                              className={`bg-white font-mono text-xs ${
+                                connError
+                                  ? "border-destructive focus-visible:ring-destructive"
+                                  : ""
+                              }`}
                             />
+                            {connError && (
+                              <p className="flex items-start gap-1.5 text-xs text-destructive">
+                                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                                {connError}
+                              </p>
+                            )}
+                            {connWarning && (
+                              <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+                                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                                {connWarning}
+                              </p>
+                            )}
                             <p className="text-xs text-muted-foreground leading-relaxed">
                               Provide this and we&apos;ll{" "}
                               <strong>create your tables automatically</strong>{" "}
@@ -1429,7 +1505,7 @@ export default function MigrationView() {
                       <Button
                         size="lg"
                         onClick={handlePayAndStart}
-                        disabled={paying || !credsReady}
+                        disabled={paying || !credsReady || !!connError}
                       >
                         {paying ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1438,9 +1514,11 @@ export default function MigrationView() {
                         )}
                         {paying
                           ? "Redirecting..."
-                          : credsReady
-                            ? `Pay $${(totalCents / 100).toFixed(2)} & Start`
-                            : "Enter Supabase details to continue"}
+                          : connError
+                            ? "Fix your connection string to continue"
+                            : credsReady
+                              ? `Pay $${(totalCents / 100).toFixed(2)} & Start`
+                              : "Enter Supabase details to continue"}
                       </Button>
                     </div>
 

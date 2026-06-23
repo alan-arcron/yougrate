@@ -2,7 +2,7 @@ import { Router, Response } from "express";
 import { z } from "zod";
 import { db } from "../db";
 import type { AuthRequest } from "../middleware/auth";
-import { requireAuth, isAdmin } from "../middleware/auth";
+import { requireAuth, isAdmin, isReviewer } from "../middleware/auth";
 import { validateBody } from "../middleware/validate";
 import { encryptSecret, decryptSecret } from "../utils/crypto";
 import * as vercelService from "../services/vercel";
@@ -66,6 +66,7 @@ router.post("/sync", requireAuth, validateBody(syncSchema), async (req: AuthRequ
     vercel_connected: !!user?.vercel_access_token,
     railway_connected: !!user?.railway_access_token,
     is_admin: isAdmin(user?.email),
+    is_reviewer: isReviewer(user?.email),
     github_access_token: undefined,
     vercel_access_token: undefined,
     railway_access_token: undefined,
@@ -85,6 +86,7 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response) => {
     vercel_connected: !!user.vercel_access_token,
     railway_connected: !!user.railway_access_token,
     is_admin: isAdmin(user.email),
+    is_reviewer: isReviewer(user.email),
     github_access_token: undefined,
     vercel_access_token: undefined,
     railway_access_token: undefined,

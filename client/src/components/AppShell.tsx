@@ -41,13 +41,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
             >
               Support
             </Button>
-            {profile?.is_admin && (
+            {(profile?.is_admin || profile?.is_reviewer) && (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => navigate("/admin")}
               >
-                Admin
+                {profile?.is_admin ? "Admin" : "Reviews"}
               </Button>
             )}
             <Button

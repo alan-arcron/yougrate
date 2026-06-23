@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Download,
   Trash2,
+  Pencil,
 } from "lucide-react";
 
 interface Stats {
@@ -58,8 +59,12 @@ interface PendingReview {
   output_repo_url: string | null;
   output_branch: string | null;
   completed_at: string | null;
+  review_notes: string | null;
+  review_artifact_name: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
   project_name: string;
-  user_email: string;
+  user_email?: string;
 }
 
 interface CostRow {
@@ -220,11 +225,17 @@ export default function Admin() {
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [reviewFiles, setReviewFiles] = useState<Record<string, File | null>>({});
   const [deliveringReview, setDeliveringReview] = useState<string | null>(null);
+  const [revising, setRevising] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (authLoading || !profile) return;
-    if (!profile.is_admin) {
+    if (!profile.is_admin && !profile.is_reviewer) {
       navigate("/dashboard");
+      return;
+    }
+    // Reviewers only get the review queue — no admin-only stats/users.
+    if (!profile.is_admin) {
+      loadReviews();
       return;
     }
     api.get<Stats>("/admin/stats").then(setStats).catch(console.error);
@@ -305,8 +316,13 @@ export default function Admin() {
         artifact_key,
         artifact_name,
       });
-      toast.success("Review delivered to the customer");
+      toast.success(
+        revising[id]
+          ? "Updated review delivered to the customer"
+          : "Review delivered to the customer",
+      );
       setReviewFiles((prev) => ({ ...prev, [id]: null }));
+      setRevising((prev) => ({ ...prev, [id]: false }));
       loadReviews();
       api.get<Stats>("/admin/stats").then(setStats).catch(console.error);
     } catch (err) {
@@ -337,6 +353,14 @@ export default function Admin() {
     } finally {
       setUpdatingReview(null);
     }
+  }
+
+  function startRevision(r: PendingReview) {
+    setReviewNotes((prev) => ({
+      ...prev,
+      [r.id]: prev[r.id] ?? r.review_notes ?? "",
+    }));
+    setRevising((prev) => ({ ...prev, [r.id]: true }));
   }
 
   async function resetAnalyses(userId: string) {
@@ -487,14 +511,18 @@ export default function Admin() {
   }
 
   if (authLoading || !profile) return null;
-  if (!profile.is_admin) return null;
+  if (!profile.is_admin && !profile.is_reviewer) return null;
+
+  const reviewerOnly = !profile.is_admin;
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
-      <h1 className="text-3xl font-bold mb-8">Admin Dashboard</h1>
+      <h1 className="text-3xl font-bold mb-8">
+        {reviewerOnly ? "Review Queue" : "Admin Dashboard"}
+      </h1>
 
       {/* Stats */}
-      {stats && (
+      {!reviewerOnly && stats && (
         <div className="space-y-4 mb-8">
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <Card>
@@ -608,7 +636,7 @@ export default function Admin() {
       )}
 
       <Tabs
-        defaultValue="users"
+        defaultValue={reviewerOnly ? "reviews" : "users"}
         onValueChange={(v) => {
           if (v === "users") loadUsers();
           if (v === "tickets") loadTickets(ticketFilter);
@@ -616,21 +644,25 @@ export default function Admin() {
           if (v === "reviews") loadReviews();
         }}
       >
-        <TabsList className="mb-6">
-          <TabsTrigger value="users">Users</TabsTrigger>
-          <TabsTrigger value="costs">Anthropic Costs</TabsTrigger>
-          <TabsTrigger value="reviews" className="relative">
-            Reviews
-            {stats && stats.pending_reviews > 0 && (
-              <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-amber-500 text-white">
-                {stats.pending_reviews}
-              </span>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="tickets">Support Tickets</TabsTrigger>
-        </TabsList>
+        {!reviewerOnly && (
+          <TabsList className="mb-6">
+            <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="costs">Anthropic Costs</TabsTrigger>
+            <TabsTrigger value="reviews" className="relative">
+              Reviews
+              {stats && stats.pending_reviews > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-amber-500 text-white">
+                  {stats.pending_reviews}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="tickets">Support Tickets</TabsTrigger>
+          </TabsList>
+        )}
 
         {/* Users tab */}
+        {!reviewerOnly && (
+        <>
         <TabsContent value="users">
           <div className="flex gap-3 mb-4">
             <div className="relative flex-1">
@@ -1228,6 +1260,8 @@ export default function Admin() {
             </div>
           )}
         </TabsContent>
+        </>
+        )}
 
         {/* Reviews tab */}
         <TabsContent value="reviews">
@@ -1237,7 +1271,7 @@ export default function Admin() {
             </div>
           ) : pendingReviews.length === 0 ? (
             <p className="text-center text-sm text-muted-foreground py-8">
-              No migrations awaiting review
+              No migrations to review
             </p>
           ) : (
             <div className="space-y-3">
@@ -1250,9 +1284,17 @@ export default function Admin() {
                           <p className="font-medium">{r.project_name}</p>
                           <Badge
                             variant={r.status === "reviewing" ? "default" : "secondary"}
-                            className="text-xs capitalize"
+                            className={`text-xs capitalize ${
+                              r.status === "reviewed"
+                                ? "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300"
+                                : ""
+                            }`}
                           >
-                            {r.status === "pending_review" ? "awaiting review" : r.status}
+                            {r.status === "pending_review"
+                              ? "awaiting review"
+                              : r.status === "reviewed"
+                                ? "delivered"
+                                : r.status}
                           </Badge>
                           {r.detected_platform && (
                             <Badge variant="outline" className="text-xs capitalize">
@@ -1261,7 +1303,8 @@ export default function Admin() {
                           )}
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">
-                          {r.user_email} &middot; {r.files_migrated}/{r.files_to_migrate} files
+                          {r.user_email && <>{r.user_email} &middot; </>}
+                          {r.files_migrated}/{r.files_to_migrate} files
                           {r.completed_at && ` · completed ${new Date(r.completed_at).toLocaleString()}`}
                         </p>
                       </div>
@@ -1290,10 +1333,39 @@ export default function Admin() {
                             {updatingReview === r.id ? "Updating..." : "Start Review"}
                           </Button>
                         )}
+                        {r.status === "reviewed" && !revising[r.id] && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => startRevision(r)}
+                          >
+                            <Pencil className="mr-1.5 h-3 w-3" />
+                            Revise
+                          </Button>
+                        )}
                       </div>
                     </div>
 
-                    {r.status === "reviewing" && (
+                    {r.status === "reviewed" && !revising[r.id] && (
+                      <div className="mt-4 border-t pt-4 space-y-2">
+                        <p className="text-xs text-muted-foreground">
+                          Delivered
+                          {r.reviewed_at &&
+                            ` ${new Date(r.reviewed_at).toLocaleString()}`}
+                          {r.reviewed_by && ` by ${r.reviewed_by}`}
+                          {r.review_artifact_name &&
+                            ` · ${r.review_artifact_name}`}
+                        </p>
+                        {r.review_notes && (
+                          <p className="text-sm whitespace-pre-wrap rounded-md bg-muted px-3 py-2">
+                            {r.review_notes}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {(r.status === "reviewing" ||
+                      (r.status === "reviewed" && revising[r.id])) && (
                       <div className="mt-4 border-t pt-4 space-y-3">
                         <div>
                           <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -1324,13 +1396,36 @@ export default function Admin() {
                             }
                             className="mt-1 block w-full text-xs text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-xs file:font-medium"
                           />
-                          {reviewFiles[r.id] && (
+                          {reviewFiles[r.id] ? (
                             <p className="text-[11px] text-muted-foreground mt-1">
                               Selected: {reviewFiles[r.id]!.name}
                             </p>
+                          ) : (
+                            r.status === "reviewed" &&
+                            r.review_artifact_name && (
+                              <p className="text-[11px] text-muted-foreground mt-1">
+                                Current: {r.review_artifact_name} (upload to
+                                replace)
+                              </p>
+                            )
                           )}
                         </div>
-                        <div className="flex justify-end">
+                        <div className="flex justify-end gap-2">
+                          {r.status === "reviewed" && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={deliveringReview === r.id}
+                              onClick={() =>
+                                setRevising((prev) => ({
+                                  ...prev,
+                                  [r.id]: false,
+                                }))
+                              }
+                            >
+                              Cancel
+                            </Button>
+                          )}
                           <Button
                             size="sm"
                             disabled={deliveringReview === r.id}
@@ -1339,8 +1434,12 @@ export default function Admin() {
                             {deliveringReview === r.id ? (
                               <>
                                 <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                                Delivering...
+                                {r.status === "reviewed"
+                                  ? "Updating..."
+                                  : "Delivering..."}
                               </>
+                            ) : r.status === "reviewed" ? (
+                              "Update delivered review"
                             ) : (
                               "Deliver review to customer"
                             )}
@@ -1356,6 +1455,7 @@ export default function Admin() {
         </TabsContent>
 
         {/* Tickets tab */}
+        {!reviewerOnly && (
         <TabsContent value="tickets">
           <div className="flex gap-2 mb-4">
             {["all", "open", "in_progress", "resolved", "closed"].map((s) => (
@@ -1500,6 +1600,7 @@ export default function Admin() {
             </div>
           )}
         </TabsContent>
+        )}
       </Tabs>
     </div>
   );
