@@ -1563,6 +1563,7 @@ export default function MigrationView() {
                         <Link
                           to="/terms"
                           target="_blank"
+                          rel="noopener noreferrer"
                           className="text-primary hover:underline"
                         >
                           Terms of Service
@@ -1571,6 +1572,7 @@ export default function MigrationView() {
                         <Link
                           to="/privacy"
                           target="_blank"
+                          rel="noopener noreferrer"
                           className="text-primary hover:underline"
                         >
                           Privacy Policy

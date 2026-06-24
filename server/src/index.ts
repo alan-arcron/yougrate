@@ -229,8 +229,11 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
 
-// Public runtime config the client can read before authenticating.
+// Public runtime config the client can read before authenticating. This holds
+// no per-user data (just a global maintenance flag), but we mark it no-store so
+// no proxy/CDN can cache a value and serve a stale one to other visitors.
 app.get("/api/config", (_req, res) => {
+  res.set("Cache-Control", "no-store");
   res.json({ under_construction: isUnderConstruction() });
 });
 

@@ -116,7 +116,7 @@ export default function Landing() {
   const { underConstruction } = useAuth();
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
       {underConstruction && (
         <div className="bg-amber-500 text-amber-950 text-center py-2.5 px-4 text-sm font-medium">
           🚧 We&apos;re currently making improvements to Yougrate. Sign-ups and
@@ -126,7 +126,7 @@ export default function Landing() {
 
       {/* Promo banner */}
       <div className="bg-primary text-primary-foreground text-center py-2 px-4 text-sm">
-        Summer promo: use code{" "}
+        New promo: use code{" "}
         <strong className="font-bold tracking-wide">ARCRON</strong> at checkout
         for a <strong>free senior engineer code review</strong> — just select
         the code review add-on.
@@ -183,7 +183,7 @@ export default function Landing() {
           <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
             Migrate your vibe-coded apps &mdash; code and database schema
             &mdash; off Lovable, Base44, and other platforms to Vercel and
-            Supabase in minutes. One click. Full ownership.
+            Supabase in just a few clicks.
           </p>
           <div className="mt-10 flex items-center justify-center gap-4">
             <Button
@@ -213,8 +213,60 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* How It Works */}
+      <section id="how-it-works" className="py-20 bg-muted/30">
+        <div className="max-w-5xl mx-auto px-6">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl md:text-4xl font-bold tracking-tight">
+              Three steps. That's it.
+            </h2>
+            <p className="mt-3 text-muted-foreground text-lg max-w-2xl mx-auto">
+              No CLI tools. No manual refactoring. Connect, click, done.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-6">
+            {STEPS.map((step) => (
+              <Card key={step.number} className="relative">
+                <CardHeader>
+                  <div className="h-10 w-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-lg font-bold mb-3">
+                    {step.number}
+                  </div>
+                  <CardTitle>{step.title}</CardTitle>
+                  <CardDescription className="text-sm leading-relaxed">
+                    {step.description}
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+
+          <div className="mt-12 max-w-3xl mx-auto">
+            <div className="relative aspect-video w-full overflow-hidden rounded-xl border shadow-sm bg-black">
+              <iframe
+                className="pointer-events-none absolute inset-0 h-full w-full"
+                src="https://www.youtube.com/embed/5Zz__9q5Rg8?autoplay=1&mute=1&loop=1&playlist=5Zz__9q5Rg8&playsinline=1&rel=0&modestbranding=1&controls=0&disablekb=1&fs=0&iv_load_policy=3"
+                title="See Yougrate in action"
+                allow="autoplay; encrypted-media; picture-in-picture; web-share"
+              />
+            </div>
+          </div>
+
+          <div className="mt-10 text-center">
+            <Button
+              size="lg"
+              className="text-base px-8"
+              onClick={() => navigate("/login")}
+            >
+              Start Your Migration
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </section>
+
       {/* Cost Comparison */}
-      <section className="py-20 bg-muted/30">
+      <section className="py-20">
         <div className="max-w-5xl mx-auto px-6">
           <div className="text-center mb-12">
             <h2 className="text-3xl md:text-4xl font-bold tracking-tight">
@@ -297,7 +349,7 @@ export default function Landing() {
       </section>
 
       {/* Why Own Your Stack */}
-      <section className="py-20">
+      <section className="py-20 bg-muted/30">
         <div className="max-w-5xl mx-auto px-6">
           <div className="text-center mb-12">
             <h2 className="text-3xl md:text-4xl font-bold tracking-tight">
@@ -341,47 +393,6 @@ export default function Landing() {
                 </CardDescription>
               </CardHeader>
             </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* How It Works */}
-      <section id="how-it-works" className="py-20 bg-muted/30">
-        <div className="max-w-5xl mx-auto px-6">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl md:text-4xl font-bold tracking-tight">
-              Three steps. That's it.
-            </h2>
-            <p className="mt-3 text-muted-foreground text-lg max-w-2xl mx-auto">
-              No CLI tools. No manual refactoring. Connect, click, done.
-            </p>
-          </div>
-
-          <div className="grid md:grid-cols-3 gap-6">
-            {STEPS.map((step) => (
-              <Card key={step.number} className="relative">
-                <CardHeader>
-                  <div className="h-10 w-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-lg font-bold mb-3">
-                    {step.number}
-                  </div>
-                  <CardTitle>{step.title}</CardTitle>
-                  <CardDescription className="text-sm leading-relaxed">
-                    {step.description}
-                  </CardDescription>
-                </CardHeader>
-              </Card>
-            ))}
-          </div>
-
-          <div className="mt-10 text-center">
-            <Button
-              size="lg"
-              className="text-base px-8"
-              onClick={() => navigate("/login")}
-            >
-              Start Your Migration
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
           </div>
         </div>
       </section>
@@ -639,7 +650,7 @@ export default function Landing() {
       {/* Footer */}
       <footer className="border-t py-8">
         <div className="max-w-6xl mx-auto px-6 flex flex-col items-center gap-4 md:flex-row md:justify-between">
-          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
             <div className="flex items-center gap-2">
               <Logo className="h-5 w-5" />
               <span style={{ fontFamily: "'Righteous', cursive" }}>
@@ -648,19 +659,19 @@ export default function Landing() {
             </div>
             <button
               onClick={() => navigate("/support")}
-              className="text-muted-foreground hover:text-foreground transition-colors"
+              className="py-1.5 text-muted-foreground hover:text-foreground transition-colors"
             >
               Support
             </button>
             <button
               onClick={() => navigate("/terms")}
-              className="text-muted-foreground hover:text-foreground transition-colors"
+              className="py-1.5 text-muted-foreground hover:text-foreground transition-colors"
             >
               Terms
             </button>
             <button
               onClick={() => navigate("/privacy")}
-              className="text-muted-foreground hover:text-foreground transition-colors"
+              className="py-1.5 text-muted-foreground hover:text-foreground transition-colors"
             >
               Privacy
             </button>
@@ -670,6 +681,7 @@ export default function Landing() {
             <a
               href="https://arcron.systems"
               target="_blank"
+              rel="noopener noreferrer"
               className="text-primary hover:underline"
             >
               Arcron Information Systems
