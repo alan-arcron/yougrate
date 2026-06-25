@@ -17,6 +17,7 @@ interface ProjectDetail {
   detected_platform: string | null;
   supabase_url: string | null;
   supabase_anon_key: string | null;
+  has_db_url?: boolean;
   status: string;
   created_at: string;
   migrations: {
@@ -39,6 +40,7 @@ export default function ProjectView() {
   const [editingSupabase, setEditingSupabase] = useState(false);
   const [supabaseUrl, setSupabaseUrl] = useState("");
   const [supabaseKey, setSupabaseKey] = useState("");
+  const [connectionString, setConnectionString] = useState("");
   const [savingSupabase, setSavingSupabase] = useState(false);
 
   useEffect(() => {
@@ -134,6 +136,7 @@ export default function ProjectView() {
                     setEditingSupabase(!editingSupabase);
                     setSupabaseUrl(project.supabase_url || "");
                     setSupabaseKey(project.supabase_anon_key || "");
+                    setConnectionString("");
                   }}
                   className="text-muted-foreground hover:text-foreground transition-colors"
                 >
@@ -146,6 +149,12 @@ export default function ProjectView() {
               {project.supabase_url && !editingSupabase && (
                 <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate">
                   {project.supabase_url}
+                </p>
+              )}
+              {!editingSupabase && (
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Connection string:{" "}
+                  {project.has_db_url ? "saved" : "not set"}
                 </p>
               )}
             </CardContent>
@@ -203,6 +212,53 @@ export default function ProjectView() {
                   The public <code className="bg-muted px-1 rounded">anon</code> key — safe to embed in client-side code
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="sb-conn">
+                  Session Pooler connection string{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (optional)
+                  </span>
+                </Label>
+                <Input
+                  id="sb-conn"
+                  type="password"
+                  autoComplete="off"
+                  placeholder="postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres"
+                  value={connectionString}
+                  onChange={(e) => setConnectionString(e.target.value)}
+                  className="font-mono text-xs"
+                />
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {project.has_db_url
+                    ? "A connection string is already saved (encrypted). Leave blank to keep it, or paste a new one to replace it. "
+                    : "Used to create your database tables. "}
+                  {(() => {
+                    const ref = project.supabase_url
+                      ? project.supabase_url
+                          .replace(/^https?:\/\//, "")
+                          .split(".")[0]
+                      : "";
+                    return ref ? (
+                      <a
+                        href={`https://supabase.com/dashboard/project/${ref}?showConnect=true`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        Open the Connect dialog
+                      </a>
+                    ) : (
+                      <span className="font-medium">Open Connect in Supabase</span>
+                    );
+                  })()}
+                  , choose <strong>Session pooler</strong>, copy the URI, and
+                  replace{" "}
+                  <code className="bg-muted px-1 rounded">[YOUR-PASSWORD]</code>{" "}
+                  with your database password. Use the pooler (not the direct{" "}
+                  <code className="bg-muted px-1 rounded">db.…</code> host) — it
+                  connects over IPv4 so our servers can reach it.
+                </p>
+              </div>
               <div className="flex gap-2">
                 <Button
                   size="sm"
@@ -212,13 +268,18 @@ export default function ProjectView() {
                     try {
                       const updated = await api.patch<ProjectDetail>(
                         `/projects/${projectId}/supabase`,
-                        { supabase_url: supabaseUrl || null, supabase_anon_key: supabaseKey || null },
+                        {
+                          supabase_url: supabaseUrl || null,
+                          supabase_anon_key: supabaseKey || null,
+                          connection_string: connectionString.trim() || undefined,
+                        },
                       );
-                      setProject((prev) => prev ? { ...prev, supabase_url: updated.supabase_url, supabase_anon_key: updated.supabase_anon_key } : prev);
+                      setProject((prev) => prev ? { ...prev, supabase_url: updated.supabase_url, supabase_anon_key: updated.supabase_anon_key, has_db_url: updated.has_db_url } : prev);
+                      setConnectionString("");
                       setEditingSupabase(false);
                       toast.success("Supabase settings updated");
-                    } catch {
-                      toast.error("Failed to update Supabase settings");
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Failed to update Supabase settings");
                     } finally {
                       setSavingSupabase(false);
                     }

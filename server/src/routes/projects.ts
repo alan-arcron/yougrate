@@ -120,10 +120,10 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     .where({ project_id: project.id })
     .orderBy("created_at", "desc");
 
-  // Never expose the (encrypted) DB connection string to the client.
+  // Never expose the (encrypted) DB connection string to the client, but tell it
+  // whether one is on file so the UI can show "saved / override".
   const { supabase_db_url, ...safeProject } = project;
-  void supabase_db_url;
-  res.json({ ...safeProject, migrations });
+  res.json({ ...safeProject, has_db_url: !!supabase_db_url, migrations });
 });
 
 router.patch("/:id/supabase", requireAuth, validateBody(updateSupabaseSchema), async (req: AuthRequest, res: Response) => {
@@ -158,8 +158,7 @@ router.patch("/:id/supabase", requireAuth, validateBody(updateSupabaseSchema), a
   }
 
   const { supabase_db_url, ...safeProject } = project;
-  void supabase_db_url;
-  res.json(safeProject);
+  res.json({ ...safeProject, has_db_url: !!supabase_db_url });
 });
 
 router.delete("/:id", requireAuth, async (req: AuthRequest, res: Response) => {

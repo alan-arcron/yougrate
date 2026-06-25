@@ -968,8 +968,7 @@ export default function MigrationView() {
         </div>
       )}
 
-      {(isCompleted || isReviewed || migrationFinished) &&
-        migration.addon_data_migration && (
+      {(isCompleted || isReviewed || migrationFinished) && (
         <Card className="mb-6">
           <CardContent className="py-4 space-y-3">
             <div className="flex items-center gap-3">
