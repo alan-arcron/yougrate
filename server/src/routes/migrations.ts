@@ -11,6 +11,7 @@ import {
   runBuildFixLoop,
   runDirectDeploy,
   isSecretFile,
+  ensureVerificationReport,
 } from "../services/migrator";
 import {
   createCheckoutForMigration,
@@ -271,6 +272,29 @@ router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
         .where({ id: migration.id })
         .update({ updated_at: now });
       migration.updated_at = now;
+    }
+  }
+
+  // Lazily backfill the plain-language verification report for migrations that
+  // finished before this feature existed (or whose generation failed at
+  // completion). One-time AI call on first view; cached on the row after.
+  const REPORTABLE_STATUSES = [
+    "completed",
+    "pending_review",
+    "reviewing",
+    "reviewed",
+    "finished",
+  ];
+  if (
+    !migration.verification_report &&
+    REPORTABLE_STATUSES.includes(migration.status)
+  ) {
+    await ensureVerificationReport(migration.id);
+    const refreshed = await db("migrations")
+      .where({ id: migration.id })
+      .first("verification_report");
+    if (refreshed?.verification_report) {
+      migration.verification_report = refreshed.verification_report;
     }
   }
 
@@ -1426,6 +1450,10 @@ router.post(
       return;
     }
 
+    await db("migrations")
+      .where({ id: migration.id })
+      .update({ schema_applied: true, schema_error: null });
+
     // Persist the connection string (encrypted) only if the user opted in.
     if (supplied && req.body.save) {
       await db("projects")
@@ -1436,7 +1464,7 @@ router.post(
         });
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, schema_applied: true });
   },
 );
 

@@ -6,6 +6,7 @@ import {
   Link,
 } from "react-router-dom";
 import { toast } from "sonner";
+import { jsPDF } from "jspdf";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +45,12 @@ import {
   Download,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+  SupabaseConnectFields,
+  refToUrl,
+  urlToRef,
+  validateConnString,
+} from "@/components/SupabaseConnectFields";
 
 interface MigrationFile {
   id: string;
@@ -52,6 +59,20 @@ interface MigrationFile {
   changes_summary: { reason?: string } | null;
   input_tokens: number;
   output_tokens: number;
+}
+
+interface VerificationCheck {
+  area: string;
+  what_changed: string;
+  how_to_test: string;
+  severity: "high" | "normal";
+}
+
+interface VerificationReport {
+  summary: string;
+  checks: VerificationCheck[];
+  edge_functions?: { name: string; description: string }[];
+  generated_at: string;
 }
 
 interface MigrationDetail {
@@ -87,9 +108,12 @@ interface MigrationDetail {
   committed_secrets: string[];
   addon_code_review: boolean;
   addon_data_migration: boolean;
+  schema_applied: boolean;
+  schema_error: string | null;
   review_notes: string | null;
   reviewed_at: string | null;
   has_review_artifact: boolean;
+  verification_report: VerificationReport | null;
   supabase_url: string | null;
   supabase_anon_key: string | null;
   has_db_url: boolean;
@@ -247,14 +271,22 @@ function BackendBanner({
         <div className="leading-relaxed space-y-1">
           <p>
             <span className="font-medium">
-              Uses serverless backend functions.
+              Your app has small pieces of backend code (&ldquo;edge
+              functions&rdquo;).
             </span>{" "}
-            {fns.length > 0
-              ? `Detected ${fns.length} function(s): ${fns.join(", ")}. `
-              : ""}
-            These run as Supabase Edge Functions, not on Vercel. After your
-            migration you&apos;ll deploy them to your Supabase project
-            (one-click automation coming soon).
+            These are little programs that run on demand &mdash; things like
+            sending an email, charging a card, or calling another service
+            &mdash; rather than living in the part of the app people click on.
+            {fns.length > 0 ? (
+              <>
+                {" "}
+                We found <span className="font-medium">{fns.length}</span> of
+                them: <span className="font-mono">{fns.join(", ")}</span>.
+              </>
+            ) : null}{" "}
+            They get hosted by Supabase (not Vercel), so after migrating
+            you&apos;ll deploy them to your Supabase project. The report below
+            explains what each one does and what to test.
           </p>
           <a
             href="https://supabase.com/docs/guides/functions/deploy"
@@ -262,7 +294,7 @@ function BackendBanner({
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-amber-900 underline"
           >
-            How to deploy Edge Functions
+            How to deploy these (step-by-step)
             <ExternalLink className="h-3 w-3" />
           </a>
         </div>
@@ -316,6 +348,338 @@ function BackendBanner({
 }
 
 /**
+ * Step-by-step Railway setup, shown when an app needs a long-running backend
+ * but the user hasn't connected Railway yet. Mirrors the flow on the Settings
+ * page so non-technical users know exactly what to do.
+ */
+function RailwaySetupSteps() {
+  return (
+    <ol className="mt-2 space-y-2 text-xs text-amber-900 dark:text-amber-200">
+      <li className="flex gap-2">
+        <span className="font-semibold shrink-0">1.</span>
+        <span className="leading-relaxed">
+          Open{" "}
+          <Link to="/settings" className="underline font-medium">
+            Settings &rarr; Railway
+          </Link>{" "}
+          in a new tab.
+        </span>
+      </li>
+      <li className="flex gap-2">
+        <span className="font-semibold shrink-0">2.</span>
+        <span className="leading-relaxed">
+          Create a Railway account (free) and generate an API token at{" "}
+          <a
+            href="https://railway.com/account/tokens"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline font-medium inline-flex items-center gap-1"
+          >
+            railway.com/account/tokens
+            <ExternalLink className="h-3 w-3" />
+          </a>
+          . Leave the workspace dropdown on{" "}
+          <strong>&ldquo;No workspace&rdquo;</strong> &mdash; a workspace- or
+          project-scoped token won&apos;t work.
+        </span>
+      </li>
+      <li className="flex gap-2">
+        <span className="font-semibold shrink-0">3.</span>
+        <span className="leading-relaxed">
+          Paste that token into the Railway box in Settings and click{" "}
+          <strong>Save Token</strong>.
+        </span>
+      </li>
+      <li className="flex gap-2">
+        <span className="font-semibold shrink-0">4.</span>
+        <span className="leading-relaxed">
+          Authorize the{" "}
+          <a
+            href="https://github.com/apps/railway-app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline font-medium inline-flex items-center gap-1"
+          >
+            Railway GitHub app
+            <ExternalLink className="h-3 w-3" />
+          </a>{" "}
+          on the repo we migrate, so Railway can build it.
+        </span>
+      </li>
+    </ol>
+  );
+}
+
+/**
+ * Render the verification report into a clean, multi-page PDF the user can keep
+ * while testing. Text-only (no canvas) so it stays crisp and tiny.
+ */
+function downloadReportPdf(
+  report: VerificationReport,
+  meta: { platform: string | null; migrationId: string },
+) {
+  const doc = new jsPDF({ unit: "pt", format: "letter" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 54;
+  const maxW = pageW - margin * 2;
+  let y = margin;
+
+  const ensureSpace = (needed: number) => {
+    if (y + needed > pageH - margin) {
+      doc.addPage();
+      y = margin;
+    }
+  };
+
+  const writeLines = (
+    text: string,
+    opts: {
+      size: number;
+      bold?: boolean;
+      color?: [number, number, number];
+      gap?: number;
+    },
+  ) => {
+    doc.setFont("helvetica", opts.bold ? "bold" : "normal");
+    doc.setFontSize(opts.size);
+    doc.setTextColor(...(opts.color ?? [30, 30, 30]));
+    const lines = doc.splitTextToSize(text, maxW);
+    const lineH = opts.size * 1.35;
+    for (const line of lines) {
+      ensureSpace(lineH);
+      doc.text(line, margin, y);
+      y += lineH;
+    }
+    y += opts.gap ?? 0;
+  };
+
+  // Header
+  writeLines("What changed & what to test", { size: 20, bold: true, gap: 4 });
+  writeLines(
+    `${meta.platform ? `${meta.platform} \u2192 Supabase migration` : "Migration"}  \u2022  ${new Date(
+      report.generated_at,
+    ).toLocaleDateString()}  \u2022  ${meta.migrationId.slice(0, 8)}`,
+    { size: 9, color: [120, 120, 120], gap: 14 },
+  );
+
+  if (report.summary) {
+    writeLines(report.summary, { size: 11, color: [60, 60, 60], gap: 18 });
+  }
+
+  const edgeFns = report.edge_functions ?? [];
+  if (edgeFns.length > 0) {
+    writeLines("Backend functions in your app", {
+      size: 13,
+      bold: true,
+      gap: 2,
+    });
+    writeLines(
+      "Small pieces of backend code that run on demand. They live on Supabase and must be deployed there separately to keep working.",
+      { size: 9.5, color: [120, 120, 120], gap: 8 },
+    );
+    for (const fn of edgeFns) {
+      writeLines(
+        `\u2022 ${fn.name}${fn.description ? ` \u2014 ${fn.description}` : ""}`,
+        { size: 10.5, color: [60, 60, 60], gap: 4 },
+      );
+    }
+    y += 12;
+  }
+
+  const items = report.checks ?? [];
+  const ordered = [...items].sort(
+    (a, b) => (a.severity === "high" ? 0 : 1) - (b.severity === "high" ? 0 : 1),
+  );
+  if (ordered.length > 0) {
+    writeLines("Test these in your app", { size: 13, bold: true, gap: 8 });
+    ordered.forEach((c, i) => {
+      ensureSpace(40);
+      const prefix = c.severity === "high" ? "[TEST FIRST] " : "";
+      writeLines(`${i + 1}. ${prefix}${c.area}`, {
+        size: 11.5,
+        bold: true,
+        color: c.severity === "high" ? [180, 83, 9] : [30, 30, 30],
+        gap: 2,
+      });
+      if (c.what_changed) {
+        writeLines(c.what_changed, { size: 10, color: [90, 90, 90], gap: 2 });
+      }
+      if (c.how_to_test) {
+        writeLines(`How to check: ${c.how_to_test}`, {
+          size: 10,
+          color: [60, 60, 60],
+          gap: 12,
+        });
+      }
+    });
+  }
+
+  const fname =
+    `yougrate-report-${meta.platform || "migration"}-${meta.migrationId.slice(0, 8)}.pdf`
+      .toLowerCase()
+      .replace(/[^a-z0-9.-]+/g, "-");
+  doc.save(fname);
+}
+
+/**
+ * The headline post-migration deliverable: a plain-language report of what
+ * changed and exactly what the (often non-technical) user should click through
+ * and test. High-severity areas (accounts, login, payments, backend functions)
+ * are pinned to the top and visually emphasized.
+ */
+function VerificationReportCard({
+  report,
+  checks,
+  onToggle,
+  platform,
+  migrationId,
+}: {
+  report: VerificationReport;
+  checks: Record<string, boolean>;
+  onToggle: (id: string, value: boolean) => void;
+  platform: string | null;
+  migrationId: string;
+}) {
+  const items = (report.checks ?? []).map((c, i) => ({
+    ...c,
+    id: `vr_${i}`,
+  }));
+  const ordered = [...items].sort(
+    (a, b) => (a.severity === "high" ? 0 : 1) - (b.severity === "high" ? 0 : 1),
+  );
+  const done = ordered.filter((c) => checks[c.id]).length;
+  const edgeFns = report.edge_functions ?? [];
+
+  return (
+    <Card className="mb-6 border-primary/30">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-primary" />
+              What changed &amp; what to test
+            </CardTitle>
+            <CardDescription className="mt-1.5">
+              A plain-English rundown of what we changed in your app and exactly
+              what to click through to make sure nothing broke.
+            </CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => downloadReportPdf(report, { platform, migrationId })}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            PDF
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {report.summary && (
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            {report.summary}
+          </p>
+        )}
+
+        {edgeFns.length > 0 && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/20">
+            <p className="text-xs font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+              <Zap className="h-3.5 w-3.5" />
+              Backend functions in your app
+            </p>
+            <p className="text-[11px] text-amber-800 dark:text-amber-300/80 mt-1 leading-relaxed">
+              These are small pieces of backend code that run on demand. They
+              live on Supabase and need to be deployed there separately to keep
+              working.
+            </p>
+            <ul className="mt-2 space-y-1.5">
+              {edgeFns.map((fn) => (
+                <li key={fn.name} className="text-xs">
+                  <span className="font-mono font-medium text-amber-900 dark:text-amber-200">
+                    {fn.name}
+                  </span>
+                  {fn.description ? (
+                    <span className="text-amber-800 dark:text-amber-300/80">
+                      {" "}
+                      &mdash; {fn.description}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {ordered.length > 0 && (
+          <div>
+            <p className="text-xs text-muted-foreground mb-2">
+              {done}/{ordered.length} checked
+            </p>
+            <div className="space-y-1.5">
+              {ordered.map((c) => {
+                const isHigh = c.severity === "high";
+                const isChecked = !!checks[c.id];
+                return (
+                  <label
+                    key={c.id}
+                    className={`flex items-start gap-3 p-3 rounded-md border transition-colors cursor-pointer ${
+                      isChecked
+                        ? "bg-muted/30 border-border/50"
+                        : isHigh
+                          ? "bg-amber-50/60 border-amber-300 hover:bg-amber-50 dark:bg-amber-950/10 dark:border-amber-900"
+                          : "bg-white border-border hover:bg-muted/30 dark:bg-transparent"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => onToggle(c.id, e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-border shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p
+                          className={`text-sm font-medium ${isChecked ? "line-through text-muted-foreground" : ""}`}
+                        >
+                          {c.area}
+                        </p>
+                        {isHigh && !isChecked && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500 text-amber-600 text-[10px] px-1.5 py-0"
+                          >
+                            Test first
+                          </Badge>
+                        )}
+                      </div>
+                      {c.what_changed && (
+                        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                          {c.what_changed}
+                        </p>
+                      )}
+                      {c.how_to_test && (
+                        <p className="text-xs mt-1 leading-relaxed">
+                          <span className="font-medium">How to check: </span>
+                          <span className="text-muted-foreground">
+                            {c.how_to_test}
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
  * Preview the variable names in pasted .env text (client-side only, for display).
  * Mirrors the server parser but returns just the keys — values are never shown.
  */
@@ -333,76 +697,6 @@ function previewEnvKeys(text: string): string[] {
     }
   }
   return keys;
-}
-
-/** Build the public Supabase URL from a project ref/ID. */
-function refToUrl(ref: string): string {
-  return ref ? `https://${ref}.supabase.co` : "";
-}
-
-/** Extract the project ref/ID from a Supabase URL (e.g. https://<ref>.supabase.co). */
-function urlToRef(url: string | null | undefined): string {
-  if (!url) return "";
-  const m = url.match(/^https?:\/\/([a-z0-9]+)\.supabase\.(co|com)/i);
-  return m ? m[1] : "";
-}
-
-/** Normalize whatever the user pastes into a bare project ref. */
-function normalizeRef(input: string): string {
-  const raw = input.trim();
-  if (raw.includes("supabase.")) return urlToRef(raw);
-  return raw.replace(/[^a-zA-Z0-9]/g, "");
-}
-
-/**
- * Client-side sanity check for a pasted Supabase connection string, so users
- * see a clear error BEFORE paying instead of a cryptic failure when we try to
- * apply the schema. Returns an error message, or null if it's empty (optional)
- * or looks valid. Mirrors the server's validateSupabaseConnectionString.
- */
-function validateConnString(raw: string): string | null {
-  const s = raw.trim();
-  if (!s) return null; // optional — they can add it later
-  if (/\[YOUR-PASSWORD\]|<password>|\[password\]|YOUR-PASSWORD/i.test(s)) {
-    return "Replace [YOUR-PASSWORD] with your actual database password.";
-  }
-  let url: URL;
-  try {
-    url = new URL(s);
-  } catch {
-    return "That doesn't look like a valid connection string — it should start with postgresql:// and come from Supabase's Connect dialog.";
-  }
-  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
-    return "Connection string must start with postgresql://";
-  }
-  const host = url.hostname.toLowerCase();
-  if (!(host.endsWith(".supabase.co") || host.endsWith(".supabase.com"))) {
-    return "Use your Supabase database host (ends in .supabase.com). Copy the Session pooler URI from the Connect dialog.";
-  }
-  if (!url.password) {
-    return "Your connection string is missing the password (postgres.<ref>:<password>@…).";
-  }
-  return null;
-}
-
-/**
- * Non-blocking heads-up for the IPv6-only direct host, which won't connect from
- * our servers. Returns a warning message, or null.
- */
-function connStringWarning(raw: string): string | null {
-  const s = raw.trim();
-  if (!s) return null;
-  let url: URL;
-  try {
-    url = new URL(s);
-  } catch {
-    return null;
-  }
-  const host = url.hostname.toLowerCase();
-  if (host.startsWith("db.") && host.endsWith(".supabase.co")) {
-    return "This is the direct connection (IPv6-only) — it usually can't be reached from our servers. Use the Session pooler URI instead (aws-…pooler.supabase.com).";
-  }
-  return null;
 }
 
 export default function MigrationView() {
@@ -648,6 +942,18 @@ export default function MigrationView() {
   async function handleApplySchema() {
     setApplyingSchema(true);
     try {
+      // Persist any corrected Supabase URL / anon key (non-sensitive) so the fix
+      // sticks for deploys and future re-applies. The DB connection string is
+      // only stored if the user opts in (handled by apply-schema's `save`).
+      const ref = supabaseProjectId ?? urlToRef(migration?.supabase_url ?? "");
+      const key = supabaseKey ?? migration?.supabase_anon_key ?? "";
+      const supabasePatch: Record<string, string> = {};
+      if (ref) supabasePatch.supabase_url = refToUrl(ref);
+      if (key) supabasePatch.supabase_anon_key = key;
+      if (Object.keys(supabasePatch).length > 0) {
+        await api.patch(`/projects/${projectId}/supabase`, supabasePatch);
+      }
+
       await api.post(`/migrations/${migrationId}/apply-schema`, {
         connection_string: dbConnString.trim() || undefined,
         save: rememberDbConn,
@@ -657,6 +963,7 @@ export default function MigrationView() {
       );
       setSchemaApplied(true);
       setDbConnString("");
+      fetchMigration();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(msg);
@@ -679,8 +986,14 @@ export default function MigrationView() {
       setPushedEnvKeys(res.keys);
       setEnvText("");
       toast.success(
-        `Pushed ${res.count} variable${res.count === 1 ? "" : "s"} to Vercel.`,
+        `Pushed ${res.count} variable${res.count === 1 ? "" : "s"} to Vercel. Redeploying so they take effect...`,
       );
+      // Auto-redeploy so the new values take effect without a manual step.
+      if (migration?.output_repo_url) {
+        await handleDeploy();
+      } else {
+        await handleDeployDirect();
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(msg);
@@ -864,6 +1177,14 @@ export default function MigrationView() {
     migration.status === "pending_review" || migration.status === "reviewing";
   const isFailed = migration.status === "failed";
 
+  // Guided post-migration flow: Deploy -> Env vars. Whichever step is "next in
+  // line" gets the green/rocket highlight so users always know what to do next.
+  const migrationDone = isCompleted || isReviewed || deployed;
+  const envPushed = !!pushedEnvKeys && pushedEnvKeys.length > 0;
+  const deployStepActive =
+    migrationDone && !deployed && !isBuilding && !isFixing;
+  const envStepActive = deployed && !envPushed;
+
   // The migrated code (and generated schema) exist once every file has been
   // processed. This stays true through later deploy attempts (building/fixing/
   // failed), so deploy-related status changes don't hide post-migration tools
@@ -955,7 +1276,20 @@ export default function MigrationView() {
         </div>
       )}
 
-      {(isCompleted || isReviewed || deployed) && (
+      {(isCompleted || isReviewed || deployed) &&
+        migration.verification_report && (
+          <VerificationReportCard
+            report={migration.verification_report}
+            checks={postDeployChecks}
+            onToggle={(id, value) =>
+              setPostDeployChecks((prev) => ({ ...prev, [id]: value }))
+            }
+            platform={migration.detected_platform}
+            migrationId={migration.id}
+          />
+        )}
+
+      {/* {(isCompleted || isReviewed || deployed) && (
         <div className="mb-6">
           <BreakEvenCalculator
             migrationCostCents={migration.estimated_cost_cents}
@@ -966,151 +1300,161 @@ export default function MigrationView() {
             setClaudeSpend={setClaudeSpend}
           />
         </div>
-      )}
+      )} */}
 
-      {(isCompleted || isReviewed || migrationFinished) && (
-        <Card className="mb-6">
-          <CardContent className="py-4 space-y-3">
-            <div className="flex items-center gap-3">
-              <Database className="h-5 w-5 text-muted-foreground shrink-0" />
-              <div>
-                <p className="text-sm font-medium">
-                  {schemaApplied || migration.has_db_url
-                    ? "Database Tables"
-                    : "Create Tables in Supabase"}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {schemaApplied
-                    ? "Schema applied to your Supabase project. You can re-apply below if you change projects or connection."
-                    : migration.has_db_url
-                      ? "We applied your schema automatically using your saved connection string — re-apply below if needed."
-                      : "Paste your Session Pooler connection string and we'll create the tables for you with one click."}
-                </p>
+      {(isCompleted || isReviewed || migrationFinished) &&
+        !(migration.schema_applied || schemaApplied) && (
+          <Card
+            className={`mb-6 ${
+              migration.schema_error ? "border-2 border-destructive/50" : ""
+            }`}
+          >
+            <CardContent className="py-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <Database className="h-5 w-5 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-sm font-medium">
+                    Create Tables in Supabase
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {migration.schema_error
+                      ? "We couldn't create your tables automatically. Double-check your Supabase details below — fix anything that's off — and try again."
+                      : migration.has_db_url
+                        ? "We tried to create your tables automatically but they aren't ready yet. Confirm your Supabase details below and re-apply."
+                        : "Confirm your Supabase project details below and we'll create the tables for you with one click."}
+                  </p>
+                </div>
               </div>
-            </div>
 
-            <label className="block">
-              <span className="text-sm font-medium">
-                Session Pooler connection string
-              </span>
-              <Input
-                type="password"
-                autoComplete="off"
-                placeholder="postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres"
-                value={dbConnString}
-                onChange={(e) => setDbConnString(e.target.value)}
-                className="mt-1 font-mono text-xs"
-              />
-              <span className="text-[11px] text-muted-foreground mt-1 block leading-relaxed">
-                {migration.has_db_url
-                  ? "Leave blank to reuse your saved connection, or paste a new one to override it. "
-                  : ""}
-                {urlToRef(migration.supabase_url) ? (
-                  <a
-                    href={`https://supabase.com/dashboard/project/${urlToRef(migration.supabase_url)}?showConnect=true`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    Open the Connect dialog
-                  </a>
-                ) : (
-                  <span className="font-medium">Open Connect in Supabase</span>
-                )}
-                , choose <strong>Session pooler</strong>, copy the URI, and
-                replace{" "}
-                <code className="bg-muted px-1 rounded">[YOUR-PASSWORD]</code>{" "}
-                with your database password. Use the pooler (not the direct{" "}
-                <code className="bg-muted px-1 rounded">db.…</code> host) — it
-                connects over IPv4 so our servers can reach it. We send it over
-                TLS, use it once, and only store it if you check the box below.
-              </span>
-            </label>
-
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={rememberDbConn}
-                onChange={(e) => setRememberDbConn(e.target.checked)}
-                className="h-4 w-4 rounded border-border"
-              />
-              Remember this connection (encrypted) for re-applies
-            </label>
-
-            <div className="flex items-center gap-3">
-              <Button
-                variant={
-                  schemaApplied || migration.has_db_url ? "outline" : "default"
-                }
-                size="sm"
-                onClick={handleApplySchema}
-                disabled={applyingSchema}
-              >
-                {applyingSchema ? (
-                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Database className="mr-2 h-3.5 w-3.5" />
-                )}
-                {applyingSchema
-                  ? "Applying..."
-                  : schemaApplied || migration.has_db_url
-                    ? "Re-apply"
-                    : "Apply Schema"}
-              </Button>
-              {schemaApplied && (
-                <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-500">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Applied
-                </span>
+              {migration.schema_error && (
+                <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <p className="leading-relaxed">
+                    <strong>Automatic table creation failed.</strong>{" "}
+                    {migration.schema_error}
+                  </p>
+                </div>
               )}
-            </div>
 
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400">
-              <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-              <p className="leading-relaxed">
-                Best run against a fresh/empty Supabase project. If a table
-                already exists, the run is rolled back and nothing is changed.
-              </p>
-            </div>
+              <SupabaseConnectFields
+                idPrefix="apply"
+                projectId={
+                  supabaseProjectId ?? urlToRef(migration.supabase_url)
+                }
+                onProjectIdChange={(ref) => {
+                  setSupabaseProjectId(ref);
+                  setSupabaseUrl(refToUrl(ref));
+                }}
+                anonKey={supabaseKey ?? migration.supabase_anon_key ?? ""}
+                onAnonKeyChange={setSupabaseKey}
+                connString={dbConnString}
+                onConnStringChange={setDbConnString}
+                connNote={
+                  migration.has_db_url
+                    ? "Leave the connection string blank to reuse your saved one, or paste a new one to override it."
+                    : undefined
+                }
+              />
 
-            {!schemaApplied && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
-                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={rememberDbConn}
+                  onChange={(e) => setRememberDbConn(e.target.checked)}
+                  className="h-4 w-4 rounded border-border"
+                />
+                Remember this connection (encrypted) for re-applies
+              </label>
+
+              <div className="flex items-center gap-3">
+                <Button
+                  variant={
+                    schemaApplied || migration.has_db_url
+                      ? "outline"
+                      : "default"
+                  }
+                  size="sm"
+                  onClick={handleApplySchema}
+                  disabled={
+                    applyingSchema || !!validateConnString(dbConnString)
+                  }
+                >
+                  {applyingSchema ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Database className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {applyingSchema
+                    ? "Applying..."
+                    : schemaApplied || migration.has_db_url
+                      ? "Re-apply"
+                      : "Apply Schema"}
+                </Button>
+                {schemaApplied && (
+                  <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-500">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Applied
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <p className="leading-relaxed">
                   <strong>
                     Your app won&apos;t work until these tables are created.
                   </strong>{" "}
-                  Paste your Supabase connection string above and click{" "}
-                  <strong>Apply Schema</strong> — we&apos;ll set everything up
-                  automatically. This is a required step.
+                  Best run against a fresh/empty Supabase project. If a table
+                  already exists, the run is rolled back and nothing is changed.
                 </p>
               </div>
-            )}
-            <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-200">
-              <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              <p className="leading-relaxed">
-                <strong>This creates empty tables — your existing rows
-                aren&apos;t copied over.</strong>{" "}
-                We rebuild your database structure (tables, columns, indexes,
-                and security policies), but moving your actual data is a
-                separate step you control. The easiest way is to export your
-                old data to CSV and import it from the Supabase dashboard
-                (Table Editor → your table → <em>Insert</em> →{" "}
-                <em>Import data from CSV</em>). See{" "}
-                <a
-                  href="https://supabase.com/docs/guides/database/import-data"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline font-medium"
-                >
-                  Supabase&apos;s import-data guide
-                </a>{" "}
-                for CSV, pgloader, and direct Postgres copy options.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+
+              <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-200">
+                <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <p className="leading-relaxed">
+                  <strong>
+                    This creates empty tables — your existing rows aren&apos;t
+                    copied over.
+                  </strong>{" "}
+                  We rebuild your database structure (tables, columns, indexes,
+                  and security policies), but moving your actual data is a
+                  separate step you control. The easiest way is to export your
+                  old data to CSV and import it from the Supabase dashboard
+                  (Table Editor → your table → <em>Insert</em> →{" "}
+                  <em>Import data from CSV</em>). See{" "}
+                  <a
+                    href="https://supabase.com/docs/guides/database/import-data"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline font-medium"
+                  >
+                    Supabase&apos;s import-data guide
+                  </a>{" "}
+                  for CSV, pgloader, and direct Postgres copy options.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+      {(isCompleted || isReviewed || migrationFinished) &&
+        (migration.schema_applied || schemaApplied) && (
+          <Card className="mb-6 border-green-500/40">
+            <CardContent className="py-4">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-5 w-5 text-green-600 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium">Database tables created</p>
+                  <p className="text-xs text-muted-foreground">
+                    We applied your schema to your Supabase project. Need to
+                    point at a different project? Update the connection from
+                    your project settings.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
       {/* Analysis results / cost estimate */}
       {(isEstimated || migration.detected_platform) && (
@@ -1170,7 +1514,23 @@ export default function MigrationView() {
               </div>
             )}
 
-            {migration.analysis_input_tokens +
+            {migration.backend_type === "server" &&
+              !profile?.railway_connected &&
+              !migration.output_repo_url && (
+                <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/20">
+                  <div className="flex items-start gap-2 text-xs text-amber-800 dark:text-amber-200">
+                    <Server className="h-4 w-4 mt-0.5 shrink-0" />
+                    <p className="leading-relaxed font-medium">
+                      Heads up: this app needs a separate backend host
+                      (Railway). Set it up now so it&apos;s ready the moment
+                      your migration finishes &mdash; it only takes a minute:
+                    </p>
+                  </div>
+                  <RailwaySetupSteps />
+                </div>
+              )}
+
+            {/* {migration.analysis_input_tokens +
               migration.analysis_output_tokens >
               0 &&
               profile?.is_admin && (
@@ -1190,401 +1550,256 @@ export default function MigrationView() {
                     {migration.analysis_output_tokens.toLocaleString()} output
                   </p>
                 </div>
-              )}
-
-            {isEstimated &&
-              (() => {
-                const addonCents = addonCodeReview ? 7500 : 0;
-                const totalCents = migration.estimated_cost_cents + addonCents;
-                const effectiveProjectId =
-                  supabaseProjectId ?? urlToRef(migration.supabase_url);
-                const effectiveUrl =
-                  supabaseUrl ??
-                  refToUrl(effectiveProjectId) ??
-                  migration.supabase_url ??
-                  "";
-                const effectiveKey =
-                  supabaseKey ?? migration.supabase_anon_key ?? "";
-                const anonKeyUrl = effectiveProjectId
-                  ? `https://supabase.com/dashboard/project/${effectiveProjectId}/settings/api-keys/legacy`
-                  : "";
-                const credsReady =
-                  effectiveUrl.trim() !== "" && effectiveKey.trim() !== "";
-                const connError = validateConnString(dbConnString);
-                const connWarning = connError
-                  ? null
-                  : connStringWarning(dbConnString);
-                return (
-                  <>
-                    <Separator className="my-4" />
-                    <div className="flex items-center gap-2 mb-3">
-                      <DollarSign className="h-5 w-5 text-green-600" />
-                      <div>
-                        <p className="text-sm font-medium">Estimated Cost</p>
-                        <p className="text-2xl font-bold">
-                          ${(totalCents / 100).toFixed(2)}
-                        </p>
-                        <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
-                          <p>$30.00 base fee (incl. database schema)</p>
-                          <p>
-                            $
-                            {(
-                              (migration.estimated_cost_cents - 3000) /
-                              100
-                            ).toFixed(2)}{" "}
-                            token usage (~
-                            {(
-                              migration.estimated_input_tokens +
-                              migration.estimated_output_tokens
-                            ).toLocaleString()}{" "}
-                            tokens)
-                          </p>
-                          {addonCodeReview && <p>$75.00 code review</p>}
-                        </div>
-                      </div>
-                    </div>
-
-                    <BreakEvenCalculator
-                      migrationCostCents={totalCents}
-                      platform={migration.detected_platform}
-                      monthlySpend={monthlySpend}
-                      setMonthlySpend={setMonthlySpend}
-                      claudeSpend={claudeSpend}
-                      setClaudeSpend={setClaudeSpend}
-                    />
-
-                    <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
-                      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                        Optional Add-ons
-                      </p>
-                      <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-white hover:bg-muted/50 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={addonCodeReview}
-                          onChange={(e) => setAddonCodeReview(e.target.checked)}
-                          className="mt-0.5 h-4 w-4 rounded border-border"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium flex items-center gap-1.5">
-                              <UserCheck className="h-3.5 w-3.5" />
-                              Senior Engineer Code Review
-                            </span>
-                            <span className="text-sm font-semibold">+$75</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                            A senior engineer from our team manually reviews
-                            your migrated codebase before delivery. The review
-                            covers:
-                          </p>
-                          <ul className="text-xs text-muted-foreground mt-1.5 space-y-0.5 list-disc list-inside">
-                            <li>
-                              Security posture &mdash; exposed keys, auth gaps,
-                              injection risks
-                            </li>
-                            <li>
-                              Architecture &mdash; proper Supabase client usage,
-                              code organization, separation of concerns
-                            </li>
-                            <li>
-                              Performance &mdash; unnecessary re-renders,
-                              missing indexes, N+1 queries
-                            </li>
-                            <li>
-                              Bug detection &mdash; broken imports, dead code
-                              paths, type mismatches
-                            </li>
-                            <li>
-                              Scalability &mdash; connection pooling, caching
-                              opportunities, rate-limit readiness
-                            </li>
-                            <li>
-                              Migration completeness &mdash; no leftover
-                              platform references or orphaned config
-                            </li>
-                          </ul>
-                          <p className="text-xs text-muted-foreground mt-1.5">
-                            Your migration will be held in a &ldquo;pending
-                            review&rdquo; state until the review is complete.
-                            Use code <strong>ARCRON</strong> at checkout for a
-                            free review.
-                          </p>
-                        </div>
-                      </label>
-                    </div>
-
-                    <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
-                      <div>
-                        <p className="text-sm font-medium">
-                          Connect your Supabase project
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          Required to run the migration. In your{" "}
-                          <a
-                            href="https://supabase.com/dashboard/projects"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:underline"
-                          >
-                            Supabase dashboard
-                          </a>
-                          , open your project and go to{" "}
-                          <strong>
-                            Project Settings &rarr; API Keys &rarr; Legacy anon,
-                            service_role API keys
-                          </strong>
-                          . Copy the{" "}
-                          <code className="bg-muted px-1 rounded">anon</code>{" "}
-                          key — it&apos;s public and safe to embed. The URL is
-                          on the{" "}
-                          <strong>Project Settings &rarr; Data API</strong>{" "}
-                          page.
-                        </p>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="estimate-supabase-id">
-                          Supabase Project ID
-                        </Label>
-                        <Input
-                          className="bg-white"
-                          id="estimate-supabase-id"
-                          placeholder="abcdefghijklmnopqrst"
-                          value={effectiveProjectId}
-                          onChange={(e) => {
-                            const ref = normalizeRef(e.target.value);
-                            setSupabaseProjectId(ref);
-                            setSupabaseUrl(refToUrl(ref));
-                          }}
-                        />
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          Found in your{" "}
-                          <a
-                            href="https://supabase.com/dashboard/projects"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:underline"
-                          >
-                            Supabase dashboard
-                          </a>{" "}
-                          under <strong>Project Settings &rarr; General</strong>{" "}
-                          (the &ldquo;Reference ID&rdquo;), or as the{" "}
-                          <code className="bg-muted px-1 rounded">
-                            &lt;id&gt;
-                          </code>{" "}
-                          in your project URL.
-                          {effectiveProjectId && (
-                            <>
-                              {" "}
-                              Your project URL:{" "}
-                              <code className="bg-muted px-1 rounded">
-                                {effectiveUrl}
-                              </code>
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      {effectiveProjectId && (
-                        <>
-                          <div className="space-y-2">
-                            <Label htmlFor="estimate-supabase-key">
-                              Anon Key
-                            </Label>
-                            <Input
-                              className="bg-white"
-                              id="estimate-supabase-key"
-                              placeholder="eyJhbGciOiJIUzI1NiIs..."
-                              value={effectiveKey}
-                              onChange={(e) => setSupabaseKey(e.target.value)}
-                            />
-                            <p className="text-xs text-muted-foreground leading-relaxed">
-                              <a
-                                href={anonKeyUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary hover:underline"
-                              >
-                                Open your API keys
-                              </a>{" "}
-                              and copy the{" "}
-                              <code className="bg-muted px-1 rounded">
-                                anon
-                              </code>{" "}
-                              /{" "}
-                              <code className="bg-muted px-1 rounded">
-                                public
-                              </code>{" "}
-                              key (under &ldquo;Legacy anon, service_role API
-                              keys&rdquo;). It&apos;s public and safe to embed.
-                            </p>
-                          </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="estimate-supabase-conn">
-                              Session Pooler connection string{" "}
-                              <span className="font-normal text-muted-foreground">
-                                (optional)
-                              </span>
-                            </Label>
-                            <Input
-                              id="estimate-supabase-conn"
-                              type="password"
-                              autoComplete="off"
-                              placeholder="postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres"
-                              value={dbConnString}
-                              onChange={(e) => setDbConnString(e.target.value)}
-                              className={`bg-white font-mono text-xs ${
-                                connError
-                                  ? "border-destructive focus-visible:ring-destructive"
-                                  : ""
-                              }`}
-                            />
-                            {connError && (
-                              <p className="flex items-start gap-1.5 text-xs text-destructive">
-                                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                                {connError}
-                              </p>
-                            )}
-                            {connWarning && (
-                              <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
-                                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                                {connWarning}
-                              </p>
-                            )}
-                            <p className="text-xs text-muted-foreground leading-relaxed">
-                              Provide this and we&apos;ll{" "}
-                              <strong>create your tables automatically</strong>{" "}
-                              when the migration finishes.{" "}
-                              {effectiveProjectId ? (
-                                <a
-                                  href={`https://supabase.com/dashboard/project/${effectiveProjectId}?showConnect=true`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-primary hover:underline"
-                                >
-                                  Open the Connect dialog
-                                </a>
-                              ) : (
-                                <>Enter your Project ID above first, then open
-                                Connect in Supabase</>
-                              )}
-                              , choose <strong>Session pooler</strong>, copy the
-                              URI, and replace{" "}
-                              <code className="bg-muted px-1 rounded">
-                                [YOUR-PASSWORD]
-                              </code>{" "}
-                              with your database password. Use the pooler (not
-                              the direct{" "}
-                              <code className="bg-muted px-1 rounded">db.…</code>{" "}
-                              host) so our servers can reach it over IPv4. Stored
-                              encrypted.
-                            </p>
-                            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-800">
-                              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                              <p className="leading-relaxed">
-                                <strong>
-                                  Your tables must be created for the app to
-                                  work.
-                                </strong>{" "}
-                                Easiest is to add the connection string now and
-                                we&apos;ll set everything up for you. If you
-                                skip it, you can add it on the next screen after
-                                the migration and we&apos;ll create the tables
-                                with one click &mdash; but the app won&apos;t
-                                run until that&apos;s done. Note: this builds
-                                your table structure, not your existing rows
-                                &mdash; we&apos;ll show you how to import your
-                                data afterward.
-                              </p>
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </div>
-
-                    <div className="flex justify-end">
-                      <Button
-                        size="lg"
-                        onClick={handlePayAndStart}
-                        disabled={paying || !credsReady || !!connError}
-                      >
-                        {paying ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <CreditCard className="mr-2 h-4 w-4" />
-                        )}
-                        {paying
-                          ? "Redirecting..."
-                          : connError
-                            ? "Fix your connection string to continue"
-                            : credsReady
-                              ? `Pay $${(totalCents / 100).toFixed(2)} & Start`
-                              : "Enter Supabase details to continue"}
-                      </Button>
-                    </div>
-
-                    <div className="mt-4 p-3 rounded-lg bg-muted/50 border border-border">
-                      <p className="text-xs text-muted-foreground leading-relaxed">
-                        <strong className="text-foreground">
-                          Please read before proceeding:
-                        </strong>{" "}
-                        Yougrate uses AI to rewrite your code. While we make
-                        best-effort attempts to produce a working migration —
-                        including automatic build error detection and up to 3
-                        AI-driven fix cycles — the output is not guaranteed to
-                        be error-free or production-ready. You may need to
-                        review and adjust the migrated code yourself. Yougrate
-                        is not responsible for bugs, data loss, or downtime
-                        resulting from migrated code. Your original repository
-                        is never modified. By proceeding with payment, you
-                        acknowledge these limitations and agree that all sales
-                        are final. Need help with your migrated code?{" "}
-                        <a
-                          href="https://arcron.systems"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          Arcron Information Systems
-                        </a>{" "}
-                        offers professional software services that can assist
-                        with any issues — reach out at{" "}
-                        <a
-                          href="mailto:yougrate@arcron.systems"
-                          className="text-primary hover:underline"
-                        >
-                          yougrate@arcron.systems
-                        </a>
-                        .
-                      </p>
-                      <p className="text-xs text-muted-foreground leading-relaxed mt-2">
-                        Your source code is sent to Anthropic (Claude) for
-                        analysis and migration. By proceeding with payment you
-                        agree to our{" "}
-                        <Link
-                          to="/terms"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          Terms of Service
-                        </Link>{" "}
-                        and{" "}
-                        <Link
-                          to="/privacy"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          Privacy Policy
-                        </Link>
-                        .
-                      </p>
-                    </div>
-                  </>
-                );
-              })()}
+              )} */}
           </CardContent>
         </Card>
       )}
+
+      {isEstimated &&
+        (() => {
+          const addonCents = addonCodeReview ? 7500 : 0;
+          const totalCents = migration.estimated_cost_cents + addonCents;
+          const effectiveProjectId =
+            supabaseProjectId ?? urlToRef(migration.supabase_url);
+          const effectiveUrl =
+            supabaseUrl ??
+            refToUrl(effectiveProjectId) ??
+            migration.supabase_url ??
+            "";
+          const effectiveKey = supabaseKey ?? migration.supabase_anon_key ?? "";
+          const credsReady =
+            effectiveUrl.trim() !== "" &&
+            effectiveKey.trim() !== "" &&
+            dbConnString.trim() !== "";
+          const connError = validateConnString(dbConnString);
+          return (
+            <Card className="mb-6 border-2 border-green-500/60 shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2 text-green-700 dark:text-green-400">
+                  <Rocket className="h-5 w-5" />
+                  Next step: start your migration
+                </CardTitle>
+                <CardDescription>
+                  Review your estimate, connect your Supabase project, then pay
+                  to begin.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2 mb-3">
+                  <DollarSign className="h-5 w-5 text-green-600" />
+                  <div>
+                    <p className="text-sm font-medium">Estimated Cost</p>
+                    <p className="text-2xl font-bold">
+                      ${(totalCents / 100).toFixed(2)}
+                    </p>
+                    <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
+                      <p>$30.00 base fee (incl. database schema)</p>
+                      <p>
+                        $
+                        {(
+                          (migration.estimated_cost_cents - 3000) /
+                          100
+                        ).toFixed(2)}{" "}
+                        token usage (~
+                        {(
+                          migration.estimated_input_tokens +
+                          migration.estimated_output_tokens
+                        ).toLocaleString()}{" "}
+                        tokens)
+                      </p>
+                      {addonCodeReview && <p>$75.00 code review</p>}
+                    </div>
+                  </div>
+                </div>
+                {/* 
+                <BreakEvenCalculator
+                  migrationCostCents={totalCents}
+                  platform={migration.detected_platform}
+                  monthlySpend={monthlySpend}
+                  setMonthlySpend={setMonthlySpend}
+                  claudeSpend={claudeSpend}
+                  setClaudeSpend={setClaudeSpend}
+                /> */}
+
+                <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Optional Add-ons
+                  </p>
+                  <label className="flex items-start gap-3 p-3 rounded-md border border-border bg-white hover:bg-muted/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={addonCodeReview}
+                      onChange={(e) => setAddonCodeReview(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-border"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium flex items-center gap-1.5">
+                          <UserCheck className="h-3.5 w-3.5" />
+                          Senior Engineer Code Review
+                        </span>
+                        <span className="text-sm font-semibold">+$75</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                        A senior engineer from our team manually reviews your
+                        migrated codebase before delivery. The review covers:
+                      </p>
+                      <ul className="text-xs text-muted-foreground mt-1.5 space-y-0.5 list-disc list-inside">
+                        <li>
+                          Security posture &mdash; exposed keys, auth gaps,
+                          injection risks
+                        </li>
+                        <li>
+                          Architecture &mdash; proper Supabase client usage,
+                          code organization, separation of concerns
+                        </li>
+                        <li>
+                          Performance &mdash; unnecessary re-renders, missing
+                          indexes, N+1 queries
+                        </li>
+                        <li>
+                          Bug detection &mdash; broken imports, dead code paths,
+                          type mismatches
+                        </li>
+                        <li>
+                          Scalability &mdash; connection pooling, caching
+                          opportunities, rate-limit readiness
+                        </li>
+                        <li>
+                          Migration completeness &mdash; no leftover platform
+                          references or orphaned config
+                        </li>
+                      </ul>
+                      <p className="text-xs text-muted-foreground mt-1.5">
+                        Your migration will be held in a &ldquo;pending
+                        review&rdquo; state until the review is complete. Use
+                        code <strong>ARCRON</strong> at checkout for a free
+                        review.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="space-y-3 my-4 p-4 rounded-lg border border-border bg-muted/30">
+                  <div>
+                    <p className="text-sm font-semibold flex items-center gap-2">
+                      Connect your Supabase project
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
+                        Required
+                      </span>
+                    </p>
+                  </div>
+                  <SupabaseConnectFields
+                    idPrefix="estimate"
+                    inputClassName="bg-white"
+                    projectId={effectiveProjectId}
+                    onProjectIdChange={(ref) => {
+                      setSupabaseProjectId(ref);
+                      setSupabaseUrl(refToUrl(ref));
+                    }}
+                    anonKey={effectiveKey}
+                    onAnonKeyChange={setSupabaseKey}
+                    connString={dbConnString}
+                    onConnStringChange={setDbConnString}
+                  />
+                </div>
+
+                <div className="my-4 flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-xs">
+                  <FileCode className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
+                  <p className="leading-relaxed text-muted-foreground">
+                    <span className="font-medium text-foreground">
+                      You&apos;ll get a plain-English report when the migration
+                      finishes.
+                    </span>{" "}
+                    We generate a &ldquo;What changed &amp; what to test&rdquo;
+                    report that walks you, in non-technical language, through
+                    everything we changed and exactly what to click through in
+                    your app to make sure it still works.
+                  </p>
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    size="lg"
+                    onClick={handlePayAndStart}
+                    disabled={paying || !credsReady || !!connError}
+                  >
+                    {paying ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <CreditCard className="mr-2 h-4 w-4" />
+                    )}
+                    {paying
+                      ? "Redirecting..."
+                      : connError
+                        ? "Fix your connection string to continue"
+                        : credsReady
+                          ? `Pay $${(totalCents / 100).toFixed(2)} & Start`
+                          : "Enter Supabase details to continue"}
+                  </Button>
+                </div>
+
+                <div className="mt-4 p-3 rounded-lg bg-muted/50 border border-border">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    <strong className="text-foreground">
+                      Please read before proceeding:
+                    </strong>{" "}
+                    Yougrate uses AI to rewrite your code. While we make
+                    best-effort attempts to produce a working migration —
+                    including automatic build error detection and up to 3
+                    AI-driven fix cycles — the output is not guaranteed to be
+                    error-free or production-ready. You may need to review and
+                    adjust the migrated code yourself. Yougrate is not
+                    responsible for bugs, data loss, or downtime resulting from
+                    migrated code. Your original repository is never modified.
+                    By proceeding with payment, you acknowledge these
+                    limitations and agree that all sales are final. Need help
+                    with your migrated code?{" "}
+                    <a
+                      href="https://arcron.systems"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Arcron Information Systems
+                    </a>{" "}
+                    offers professional software services that can assist with
+                    any issues — reach out at{" "}
+                    <a
+                      href="mailto:yougrate@arcron.systems"
+                      className="text-primary hover:underline"
+                    >
+                      yougrate@arcron.systems
+                    </a>
+                    .
+                  </p>
+                  <p className="text-xs text-muted-foreground leading-relaxed mt-2">
+                    Your source code is sent to Anthropic (Claude) for analysis
+                    and migration. By proceeding with payment you agree to our{" "}
+                    <Link
+                      to="/terms"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Terms of Service
+                    </Link>{" "}
+                    and{" "}
+                    <Link
+                      to="/privacy"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Privacy Policy
+                    </Link>
+                    .
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
 
       {/* Analyzing indicator */}
       {isAnalyzing && (
@@ -1878,11 +2093,26 @@ export default function MigrationView() {
 
       {/* Push migrated code */}
       {(isCompleted || isReviewed || deployed) && !isBuilding && !isFixing && (
-        <Card className="mb-6 border-primary/30">
+        <Card
+          className={`mb-6 ${
+            deployStepActive
+              ? "border-2 border-green-500/60 shadow-sm"
+              : "border-primary/30"
+          }`}
+        >
           <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
+            <CardTitle
+              className={`text-lg flex items-center gap-2 ${
+                deployStepActive ? "text-green-700 dark:text-green-400" : ""
+              }`}
+            >
               <Rocket className="h-5 w-5" />
               Deploy to Vercel
+              {deployStepActive && (
+                <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
+                  Next step
+                </span>
+              )}
             </CardTitle>
             <CardDescription>
               One click &mdash; no GitHub account required. We upload your
@@ -1890,6 +2120,19 @@ export default function MigrationView() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {migration.schema_error &&
+              !(migration.schema_applied || schemaApplied) && (
+                <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <p className="leading-relaxed">
+                    <strong>Create your database tables first.</strong> We
+                    couldn&apos;t set them up automatically, so your app will
+                    deploy but won&apos;t work until the tables exist. Resolve
+                    the <strong>Create Tables in Supabase</strong> step above
+                    before deploying.
+                  </p>
+                </div>
+              )}
             {!deployed ? (
               <Button onClick={handleDeployDirect} disabled={deployingDirect}>
                 {deployingDirect ? (
@@ -1925,7 +2168,7 @@ export default function MigrationView() {
             <p className="text-xs text-muted-foreground">
               Want Vercel to rebuild automatically every time you push code?
               Push to GitHub below and connect Vercel to GitHub in Settings
-              (optional, for GitHub users).
+              (optional, but recommended).
             </p>
           </CardContent>
         </Card>
@@ -1934,11 +2177,19 @@ export default function MigrationView() {
       {(isCompleted || isReviewed) && !migration.output_repo_url && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-lg">Push to GitHub (optional)</CardTitle>
+            <CardTitle className="text-lg flex items-center gap-2">
+              Push to GitHub
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
+                Optional
+              </span>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
+                Recommended
+              </span>
+            </CardTitle>
             <CardDescription>
-              For GitHub users &mdash; push the migrated code to a repo so
-              Vercel can auto-deploy on every push. Not required if you used the
-              one-click deploy above.
+              Push the migrated code to a repo so Vercel can auto-deploy on
+              every push. Not required if you used the one-click deploy above or
+              don't intend to use GitHub.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -2060,11 +2311,28 @@ export default function MigrationView() {
         (() => {
           const previewKeys = previewEnvKeys(envText);
           return (
-            <Card className="mb-6">
+            <Card
+              className={`mb-6 ${
+                envStepActive ? "border-2 border-green-500/60 shadow-sm" : ""
+              }`}
+            >
               <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <KeyRound className="h-5 w-5 text-muted-foreground" />
+                <CardTitle
+                  className={`text-lg flex items-center gap-2 ${
+                    envStepActive ? "text-green-700 dark:text-green-400" : ""
+                  }`}
+                >
+                  {envStepActive ? (
+                    <Rocket className="h-5 w-5" />
+                  ) : (
+                    <KeyRound className="h-5 w-5 text-muted-foreground" />
+                  )}
                   Environment Variables
+                  {envStepActive && (
+                    <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
+                      Next step
+                    </span>
+                  )}
                 </CardTitle>
                 <CardDescription>
                   Paste your <code className="text-xs">.env</code> (or choose a
@@ -2136,7 +2404,8 @@ export default function MigrationView() {
                       <span className="font-mono">
                         {pushedEnvKeys.join(", ")}
                       </span>
-                      . Redeploy for the new values to take effect.
+                      . We&apos;re redeploying your app automatically so the new
+                      values take effect.
                     </p>
                   </div>
                 )}
@@ -2171,16 +2440,16 @@ export default function MigrationView() {
           </CardHeader>
           <CardContent className="space-y-3">
             {!profile?.railway_connected ? (
-              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
-                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-                <p className="leading-relaxed">
-                  Connect your Railway account in{" "}
-                  <Link to="/settings" className="underline font-medium">
-                    Settings
-                  </Link>{" "}
-                  to deploy the backend. You&apos;ll also need to authorize
-                  Railway&apos;s GitHub app on this repo.
-                </p>
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/20">
+                <div className="flex items-start gap-2 text-xs text-amber-800 dark:text-amber-200">
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <p className="leading-relaxed font-medium">
+                    Connect Railway to deploy your backend. It&apos;s free to
+                    start (~$5/mo after a small free allowance). Here&apos;s
+                    how:
+                  </p>
+                </div>
+                <RailwaySetupSteps />
               </div>
             ) : !migration.railway_service_id ? (
               <>
@@ -2332,9 +2601,11 @@ export default function MigrationView() {
       {deployed && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-lg">Post-Deploy Checklist</CardTitle>
+            <CardTitle className="text-lg">Setup checklist</CardTitle>
             <CardDescription>
-              Complete these steps to make your migrated app production-ready
+              The one-time technical setup to finish wiring up your app. (For
+              what to click through and test, see &ldquo;What changed &amp; what
+              to test&rdquo; above.)
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -2405,18 +2676,6 @@ export default function MigrationView() {
                     label: "Supabase RLS Guide",
                     url: "https://supabase.com/docs/guides/database/postgres/row-level-security",
                   },
-                },
-                {
-                  id: "test_auth",
-                  title: "Test login and signup flows",
-                  detail:
-                    "Sign up a test user, verify email confirmation works, and test all auth-gated pages. Check browser console for errors.",
-                },
-                {
-                  id: "test_data",
-                  title: "Verify database operations",
-                  detail:
-                    "Create, read, update, and delete records through your app. Check that data persists correctly in Supabase.",
                 },
                 {
                   id: "check_builds",

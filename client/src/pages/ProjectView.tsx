@@ -5,9 +5,12 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, ExternalLink, Loader2, Lock, CreditCard, Pencil, Check, X, Info } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Plus, ExternalLink, Loader2, Lock, CreditCard, Pencil, Check, X, Info, ChevronRight } from "lucide-react";
+import {
+  SupabaseConnectFields,
+  refToUrl,
+  urlToRef,
+} from "@/components/SupabaseConnectFields";
 
 interface ProjectDetail {
   id: string;
@@ -38,7 +41,7 @@ export default function ProjectView() {
   const [quotaBlocked, setQuotaBlocked] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [editingSupabase, setEditingSupabase] = useState(false);
-  const [supabaseUrl, setSupabaseUrl] = useState("");
+  const [supabaseProjectId, setSupabaseProjectId] = useState("");
   const [supabaseKey, setSupabaseKey] = useState("");
   const [connectionString, setConnectionString] = useState("");
   const [savingSupabase, setSavingSupabase] = useState(false);
@@ -112,6 +115,33 @@ export default function ProjectView() {
           )}
         </div>
 
+        {!["analyzed", "migrated", "deployed", "estimated"].includes(project.status) && (
+          <div className="mb-8 flex items-start gap-3 rounded-lg border border-blue-500/40 bg-blue-500/10 p-4">
+            <Info className="h-5 w-5 text-blue-500 shrink-0 mt-0.5" />
+            <div className="text-sm leading-relaxed">
+              <p className="font-medium text-blue-600 dark:text-blue-400">
+                Should I migrate?
+              </p>
+              <p className="text-muted-foreground mt-1">
+                Migrating moves your app off the no-code platform so you fully
+                own the code and run it on your own Supabase and Vercel &mdash;
+                no more monthly platform lock-in or per-seat pricing. It&apos;s a
+                great fit once your idea is validated and you want to control
+                costs and customize freely. If you&apos;re still rapidly
+                prototyping, it may be worth staying put a little longer. Not
+                sure?{" "}
+                <a
+                  href="mailto:yougrate@arcron.systems"
+                  className="text-primary hover:underline"
+                >
+                  Reach out
+                </a>{" "}
+                and we&apos;ll help you decide.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-3 gap-4 mb-8">
           <Card>
             <CardContent className="py-4">
@@ -134,7 +164,7 @@ export default function ProjectView() {
                 <button
                   onClick={() => {
                     setEditingSupabase(!editingSupabase);
-                    setSupabaseUrl(project.supabase_url || "");
+                    setSupabaseProjectId(urlToRef(project.supabase_url));
                     setSupabaseKey(project.supabase_anon_key || "");
                     setConnectionString("");
                   }}
@@ -170,95 +200,20 @@ export default function ProjectView() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50 border border-border text-xs text-muted-foreground">
-                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span>
-                  In your{" "}
-                  <a
-                    href="https://supabase.com/dashboard/projects"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    Supabase dashboard
-                  </a>
-                  , open your project. The anon key is under{" "}
-                  <strong>Project Settings &rarr; API Keys &rarr; Legacy anon, service_role API keys</strong>{" "}
-                  (the one labeled <code className="bg-muted px-1 rounded">anon</code> / <code className="bg-muted px-1 rounded">public</code>), and the URL is on the <strong>Project Settings &rarr; Data API</strong> page.
-                </span>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="sb-url">Supabase URL</Label>
-                <Input
-                  id="sb-url"
-                  placeholder="https://abcdefghijkl.supabase.co"
-                  value={supabaseUrl}
-                  onChange={(e) => setSupabaseUrl(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Looks like <code className="bg-muted px-1 rounded">https://&lt;project-id&gt;.supabase.co</code>
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="sb-key">Anon Key</Label>
-                <Input
-                  id="sb-key"
-                  placeholder="eyJhbGciOiJIUzI1NiIs..."
-                  value={supabaseKey}
-                  onChange={(e) => setSupabaseKey(e.target.value)}
-                  type="password"
-                />
-                <p className="text-xs text-muted-foreground">
-                  The public <code className="bg-muted px-1 rounded">anon</code> key — safe to embed in client-side code
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="sb-conn">
-                  Session Pooler connection string{" "}
-                  <span className="font-normal text-muted-foreground">
-                    (optional)
-                  </span>
-                </Label>
-                <Input
-                  id="sb-conn"
-                  type="password"
-                  autoComplete="off"
-                  placeholder="postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres"
-                  value={connectionString}
-                  onChange={(e) => setConnectionString(e.target.value)}
-                  className="font-mono text-xs"
-                />
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {project.has_db_url
-                    ? "A connection string is already saved (encrypted). Leave blank to keep it, or paste a new one to replace it. "
-                    : "Used to create your database tables. "}
-                  {(() => {
-                    const ref = project.supabase_url
-                      ? project.supabase_url
-                          .replace(/^https?:\/\//, "")
-                          .split(".")[0]
-                      : "";
-                    return ref ? (
-                      <a
-                        href={`https://supabase.com/dashboard/project/${ref}?showConnect=true`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        Open the Connect dialog
-                      </a>
-                    ) : (
-                      <span className="font-medium">Open Connect in Supabase</span>
-                    );
-                  })()}
-                  , choose <strong>Session pooler</strong>, copy the URI, and
-                  replace{" "}
-                  <code className="bg-muted px-1 rounded">[YOUR-PASSWORD]</code>{" "}
-                  with your database password. Use the pooler (not the direct{" "}
-                  <code className="bg-muted px-1 rounded">db.…</code> host) — it
-                  connects over IPv4 so our servers can reach it.
-                </p>
-              </div>
+              <SupabaseConnectFields
+                idPrefix="proj"
+                projectId={supabaseProjectId}
+                onProjectIdChange={setSupabaseProjectId}
+                anonKey={supabaseKey}
+                onAnonKeyChange={setSupabaseKey}
+                connString={connectionString}
+                onConnStringChange={setConnectionString}
+                connNote={
+                  project.has_db_url
+                    ? "A connection string is already saved (encrypted). Leave blank to keep it, or paste a new one to replace it."
+                    : undefined
+                }
+              />
               <div className="flex gap-2">
                 <Button
                   size="sm"
@@ -269,7 +224,7 @@ export default function ProjectView() {
                       const updated = await api.patch<ProjectDetail>(
                         `/projects/${projectId}/supabase`,
                         {
-                          supabase_url: supabaseUrl || null,
+                          supabase_url: refToUrl(supabaseProjectId) || null,
                           supabase_anon_key: supabaseKey || null,
                           connection_string: connectionString.trim() || undefined,
                         },
@@ -361,6 +316,7 @@ export default function ProjectView() {
                       <Badge variant="secondary" className="text-xs capitalize">
                         {m.status}
                       </Badge>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
                     </div>
                   </button>
                 ))}

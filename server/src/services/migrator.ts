@@ -7,6 +7,7 @@ import {
   estimateTokens,
   calculateCost,
   generateSupabaseSchema,
+  generateVerificationReport,
   describeAiError,
   MODEL,
   type AnalysisContext,
@@ -29,6 +30,97 @@ import type {
   SupabaseService,
   BackendDetails,
 } from "../types";
+
+/** Pull the per-file "reason it was flagged" out of changes_summary, tolerant
+ *  of the column being a parsed object or a JSON string. */
+function readChangeReason(changesSummary: unknown): string {
+  if (!changesSummary) return "";
+  try {
+    const obj =
+      typeof changesSummary === "string"
+        ? JSON.parse(changesSummary)
+        : changesSummary;
+    return typeof obj?.reason === "string" ? obj.reason : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Collect the completed files + the reason each was changed, the raw material
+ *  for the plain-language verification report. */
+async function gatherChangedFiles(
+  migrationId: string,
+): Promise<{ path: string; reason: string }[]> {
+  const rows = await db("migration_files")
+    .where({ migration_id: migrationId, status: "completed" })
+    .select("file_path", "changes_summary");
+  return rows.map((r) => ({
+    path: r.file_path,
+    reason: readChangeReason(r.changes_summary),
+  }));
+}
+
+function parseServices(raw: unknown): SupabaseService[] {
+  try {
+    const v = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(v) ? (v as SupabaseService[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseBackendDetails(raw: unknown): BackendDetails | null {
+  if (!raw) return null;
+  try {
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as BackendDetails;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Generate and persist the plain-language "what changed & what to test" report
+ * for a migration if it doesn't already have one. Best-effort and idempotent:
+ * used both at completion time and as a lazy backfill for older migrations on
+ * first view. Returns the report's token usage (0/0 if skipped or failed) so
+ * the completion path can roll it into billing.
+ */
+export async function ensureVerificationReport(
+  migrationId: string,
+): Promise<{ inputTokens: number; outputTokens: number }> {
+  const migration = await db("migrations").where({ id: migrationId }).first();
+  if (!migration || migration.verification_report) {
+    return { inputTokens: 0, outputTokens: 0 };
+  }
+
+  const changedFiles = await gatherChangedFiles(migrationId);
+  if (changedFiles.length === 0) return { inputTokens: 0, outputTokens: 0 };
+
+  try {
+    const result = await generateVerificationReport({
+      platform: migration.detected_platform || "unknown",
+      services: parseServices(migration.detected_services),
+      backendDetails: parseBackendDetails(migration.backend_details),
+      changedFiles,
+    });
+    await db("migrations")
+      .where({ id: migrationId })
+      .update({
+        verification_report: JSON.stringify(result.report),
+        updated_at: new Date().toISOString(),
+      });
+    return {
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+    };
+  } catch (err) {
+    console.warn(
+      `[migrator:${migrationId.slice(0, 8)}] verification report failed:`,
+      err instanceof Error ? err.message : err,
+    );
+    return { inputTokens: 0, outputTokens: 0 };
+  }
+}
 
 function friendlyError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
@@ -732,11 +824,34 @@ export async function runMigration(migrationId: string): Promise<void> {
                 await log(migrationId, "Applying schema to your Supabase database...");
                 const applyResult = await applySchema(conn, schemaResult.content);
                 if (applyResult.ok) {
+                  await db("migrations")
+                    .where({ id: migrationId })
+                    .update({ schema_applied: true, schema_error: null });
                   await log(migrationId, "Database tables created in Supabase");
                 } else {
+                  await db("migrations")
+                    .where({ id: migrationId })
+                    .update({ schema_applied: false, schema_error: applyResult.error });
                   await log(migrationId, applyResult.error, "warn");
                 }
+              } else {
+                await db("migrations")
+                  .where({ id: migrationId })
+                  .update({ schema_applied: false, schema_error: valid.error });
+                await log(
+                  migrationId,
+                  `Could not create database tables: ${valid.error}`,
+                  "warn",
+                );
               }
+            } else {
+              await db("migrations")
+                .where({ id: migrationId })
+                .update({
+                  schema_applied: false,
+                  schema_error:
+                    "No Supabase connection string was provided, so your database tables weren't created automatically.",
+                });
             }
           } else {
             await log(migrationId, "No source files available for schema generation", "warn");
@@ -745,6 +860,33 @@ export async function runMigration(migrationId: string): Promise<void> {
           const msg = err instanceof Error ? err.message : String(err);
           await log(migrationId, `Schema generation failed: ${msg}`, "warn");
         }
+      }
+
+      // Generate the plain-language "what changed & what to test" report while
+      // we still have everything loaded. Best-effort: a failure here must not
+      // fail the migration. Its tokens roll into the migration's actual cost.
+      try {
+        const changedFiles = await gatherChangedFiles(migrationId);
+        if (changedFiles.length > 0) {
+          await log(migrationId, "Generating your post-migration report...");
+          const reportResult = await generateVerificationReport({
+            platform: migration.detected_platform || "unknown",
+            services: parseServices(migration.detected_services),
+            backendDetails: parseBackendDetails(migration.backend_details),
+            changedFiles,
+          });
+          totalInput += reportResult.inputTokens;
+          totalOutput += reportResult.outputTokens;
+          await db("migrations")
+            .where({ id: migrationId })
+            .update({
+              verification_report: JSON.stringify(reportResult.report),
+            });
+          await log(migrationId, "Post-migration report ready");
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await log(migrationId, `Report generation skipped: ${msg}`, "warn");
       }
 
       const finalCost = calculateCost(totalInput, totalOutput);

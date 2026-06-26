@@ -56,6 +56,37 @@ export interface BackendDetails {
   edge_functions?: string[];
 }
 
+// A single "go test this" item in the post-migration verification report,
+// written in plain language for non-technical users.
+export interface VerificationCheck {
+  // Short, human feature name, e.g. "Logging in & sign-up".
+  area: string;
+  // What we changed in this area, in plain English.
+  what_changed: string;
+  // Concrete steps the user should take to confirm it still works.
+  how_to_test: string;
+  // "high" for risky/critical areas (auth, password reset, payments, backend
+  // functions) that should be tested first; "normal" otherwise.
+  severity: "high" | "normal";
+}
+
+// Plain-language explanation of a single detected edge/serverless function.
+export interface VerificationEdgeFunction {
+  name: string;
+  description: string;
+}
+
+// AI-generated, per-migration report telling the user (in plain language) what
+// changed and exactly what to test after migrating. Generated once when a
+// migration completes; backfilled lazily for older migrations on first view.
+export interface VerificationReport {
+  // 2-3 sentence plain-English overview of what the migration did.
+  summary: string;
+  checks: VerificationCheck[];
+  edge_functions?: VerificationEdgeFunction[];
+  generated_at: string;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -120,12 +151,15 @@ export interface Migration {
   committed_secrets: string[];
   migration_log: MigrationLogEntry[];
   addon_data_migration: boolean;
+  schema_applied: boolean;
+  schema_error: string | null;
   addon_code_review: boolean;
   review_notes: string | null;
   review_artifact_key: string | null;
   review_artifact_name: string | null;
   reviewed_at: string | null;
   reviewed_by: string | null;
+  verification_report: VerificationReport | null;
   deployment_id: string | null;
   started_at: string | null;
   completed_at: string | null;

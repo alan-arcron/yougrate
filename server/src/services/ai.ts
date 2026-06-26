@@ -1,6 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ANTHROPIC_PRICING } from "../types";
-import type { DetectedPlatform, SupabaseService } from "../types";
+import type {
+  DetectedPlatform,
+  SupabaseService,
+  BackendDetails,
+  VerificationReport,
+  VerificationCheck,
+  VerificationEdgeFunction,
+} from "../types";
 import { isSafeRelativePath } from "../utils/paths";
 
 let client: Anthropic | null = null;
@@ -499,4 +506,158 @@ export function calculateCost(
   const billedCostCents = tokenCostCents + BASE_FEE_CENTS;
 
   return { rawCostCents, tokenCostCents, baseFeeCents: BASE_FEE_CENTS, billedCostCents, markup };
+}
+
+export interface VerificationReportInput {
+  platform: DetectedPlatform | string;
+  services: SupabaseService[];
+  backendDetails: BackendDetails | null;
+  // Files that were changed during the migration, with the reason each was
+  // flagged (from the analysis phase). This is what lets the model name the
+  // user's actual features (e.g. "password reset", "map view").
+  changedFiles: { path: string; reason: string }[];
+}
+
+export interface VerificationReportResult {
+  report: VerificationReport;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+// Hard caps so a huge project can't blow up the prompt. Paths + short reasons
+// are tiny, so 120 files is plenty of signal while staying cheap.
+const MAX_REPORT_FILES = 120;
+
+function coerceSeverity(v: unknown): VerificationCheck["severity"] {
+  return v === "high" ? "high" : "normal";
+}
+
+/**
+ * Generate a plain-language, per-migration "what changed & what to test"
+ * report for a non-technical user. We feed only file paths + the short reason
+ * each file was flagged (never file bodies), so this is a single cheap call.
+ * The model infers the user's real feature areas (auth, password reset, the
+ * specific screens it touched) and explains any edge/serverless functions in
+ * everyday terms.
+ */
+export async function generateVerificationReport(
+  input: VerificationReportInput,
+): Promise<VerificationReportResult> {
+  const anthropic = getClient();
+
+  const files = input.changedFiles.slice(0, MAX_REPORT_FILES);
+  const fileList = files
+    .map((f) => `- ${f.path}${f.reason ? ` — ${f.reason}` : ""}`)
+    .join("\n");
+  const edgeFns = input.backendDetails?.edge_functions ?? [];
+  const backendType = input.backendDetails?.reason
+    ? input.backendDetails.reason
+    : "Frontend talks directly to Supabase; no separate backend.";
+
+  const response = await createMessage(anthropic, {
+    model: MODEL,
+    max_tokens: 3000,
+    system:
+      "You write post-migration verification reports for NON-TECHNICAL founders who built their app on a no-code/vibe-code platform. They do not know developer jargon. Never use unexplained terms like 'edge function', 'serverless', 'SDK', 'environment variable', 'RLS', or 'auth provider' without a plain-language explanation in the same sentence. Write like you're talking to a smart friend who has never written code. Output ONLY a single JSON object, no markdown fences, no prose before or after.",
+    messages: [
+      {
+        role: "user",
+        content: `A user's app was just migrated off "${input.platform}" to run on Supabase. Below is the list of files we changed and why. Based ONLY on this, produce a report telling the user, in plain language, what was changed and exactly what they should click through and test in their app to make sure nothing broke.
+
+Backend type: ${backendType}
+Supabase features in use: ${input.services.join(", ") || "database"}
+${edgeFns.length > 0 ? `Detected backend functions: ${edgeFns.join(", ")}` : "No separate backend functions detected."}
+
+## Files we changed (path — why it was flagged)
+${fileList || "(no per-file detail available)"}
+
+## Output JSON shape (return EXACTLY this shape)
+{
+  "summary": "2-3 sentences, plain English, describing what the migration did overall.",
+  "checks": [
+    {
+      "area": "Short feature name a non-coder would recognize, e.g. 'Signing up & logging in' or 'Password reset emails'",
+      "what_changed": "One or two plain-English sentences on what we changed here and why it might behave differently.",
+      "how_to_test": "Concrete click-by-click steps the user can do in their live app to confirm it works.",
+      "severity": "high or normal"
+    }
+  ],
+  "edge_functions": [
+    { "name": "exact-function-name", "description": "Plain-English: what this little piece of backend code most likely does in their app and that it must be deployed to Supabase separately to keep working." }
+  ]
+}
+
+Rules:
+- Derive 'area' items from the ACTUAL files/features above. Group related files into one area (e.g. all login/signup/password files -> auth areas). Prefer the user's real feature names over generic ones.
+- Mark anything involving accounts, logging in, sign-up, password reset, payments/billing, or backend functions as severity "high".
+- Always include checks for any auth/login/signup/password files present, since those break most often after a migration.
+- If there are no backend functions, return an empty "edge_functions" array.
+- Aim for 4-8 check items. Be specific and reassuring. No code, no jargon without explanation.`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0]?.type === "text" ? response.content[0].text : "{}";
+  const raw = stripMarkdownFences(text).trim();
+
+  let parsed: {
+    summary?: string;
+    checks?: unknown[];
+    edge_functions?: unknown[];
+  } = {};
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Last-ditch: try to extract the first {...} block.
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        parsed = JSON.parse(m[0]);
+      } catch {
+        parsed = {};
+      }
+    }
+  }
+
+  const checks: VerificationCheck[] = Array.isArray(parsed.checks)
+    ? parsed.checks
+        .map((c) => {
+          const obj = (c ?? {}) as Record<string, unknown>;
+          return {
+            area: String(obj.area ?? "").trim(),
+            what_changed: String(obj.what_changed ?? "").trim(),
+            how_to_test: String(obj.how_to_test ?? "").trim(),
+            severity: coerceSeverity(obj.severity),
+          };
+        })
+        .filter((c) => c.area && c.how_to_test)
+    : [];
+
+  const edge_functions: VerificationEdgeFunction[] = Array.isArray(
+    parsed.edge_functions,
+  )
+    ? parsed.edge_functions
+        .map((e) => {
+          const obj = (e ?? {}) as Record<string, unknown>;
+          return {
+            name: String(obj.name ?? "").trim(),
+            description: String(obj.description ?? "").trim(),
+          };
+        })
+        .filter((e) => e.name)
+    : [];
+
+  const report: VerificationReport = {
+    summary: String(parsed.summary ?? "").trim(),
+    checks,
+    edge_functions,
+    generated_at: new Date().toISOString(),
+  };
+
+  return {
+    report,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+  };
 }
