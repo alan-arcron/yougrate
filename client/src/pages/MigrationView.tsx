@@ -534,12 +534,14 @@ function VerificationReportCard({
   onToggle,
   platform,
   migrationId,
+  highlight = false,
 }: {
   report: VerificationReport;
   checks: Record<string, boolean>;
   onToggle: (id: string, value: boolean) => void;
   platform: string | null;
   migrationId: string;
+  highlight?: boolean;
 }) {
   const items = (report.checks ?? []).map((c, i) => ({
     ...c,
@@ -552,13 +554,30 @@ function VerificationReportCard({
   const edgeFns = report.edge_functions ?? [];
 
   return (
-    <Card className="mb-6 border-primary/30">
+    <Card
+      className={`mb-6 ${
+        highlight ? "border-2 border-green-500/60 shadow-sm" : "border-primary/30"
+      }`}
+    >
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-primary" />
+            <CardTitle
+              className={`text-lg flex items-center gap-2 ${
+                highlight ? "text-green-700 dark:text-green-400" : ""
+              }`}
+            >
+              {highlight ? (
+                <Rocket className="h-5 w-5" />
+              ) : (
+                <CheckCircle2 className="h-5 w-5 text-primary" />
+              )}
               What changed &amp; what to test
+              {highlight && (
+                <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
+                  Final step
+                </span>
+              )}
             </CardTitle>
             <CardDescription className="mt-1.5">
               A plain-English rundown of what we changed in your app and exactly
@@ -576,7 +595,18 @@ function VerificationReportCard({
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 max-h-[480px] overflow-y-auto">
+        {highlight && (
+          <div className="flex items-start gap-2 rounded-md border border-green-300 bg-green-50 p-3 text-xs text-green-800 dark:border-green-900 dark:bg-green-950/20 dark:text-green-300">
+            <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
+            <p className="leading-relaxed">
+              <strong>You&apos;re all set — that&apos;s everything on our end!</strong>{" "}
+              Your app is deployed and your environment variables are in place.
+              The last thing to do is open your app and click through the checks
+              below to make sure everything works.
+            </p>
+          </div>
+        )}
         {report.summary && (
           <p className="text-sm leading-relaxed text-muted-foreground">
             {report.summary}
@@ -1286,6 +1316,7 @@ export default function MigrationView() {
             }
             platform={migration.detected_platform}
             migrationId={migration.id}
+            highlight={deployed && envPushed}
           />
         )}
 
