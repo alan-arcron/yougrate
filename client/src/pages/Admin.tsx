@@ -130,6 +130,7 @@ interface UserMigration {
   files_migrated: number;
   actual_cost_cents: number;
   estimated_cost_cents: number;
+  revenue_cents: number;
   retry_count: number;
   created_at: string;
 }
@@ -846,9 +847,9 @@ export default function Admin() {
                                     </span>
                                   </div>
                                   <div className="flex items-center gap-2 shrink-0">
-                                    {m.actual_cost_cents > 0 && (
+                                    {m.revenue_cents > 0 && (
                                       <span className="font-mono text-muted-foreground">
-                                        ${(m.actual_cost_cents / 100).toFixed(2)}
+                                        ${(m.revenue_cents / 100).toFixed(2)}
                                       </span>
                                     )}
                                     {m.retry_count > 0 && (

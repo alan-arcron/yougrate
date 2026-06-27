@@ -263,7 +263,31 @@ router.get("/users/:id/migrations", async (req: AuthRequest, res: Response) => {
       "projects.github_repo_full_name",
     )
     .orderBy("migrations.created_at", "desc");
-  res.json(migrations);
+
+  // What the customer was actually charged per migration (sum of paid Stripe
+  // billing events), so the UI can show real revenue rather than internal cost.
+  const ids = migrations.map((m: Record<string, unknown>) => String(m.id));
+  const billing = ids.length
+    ? await db("billing_events")
+        .whereIn("migration_id", ids)
+        .where({ status: "paid" })
+        .groupBy("migration_id")
+        .select("migration_id")
+        .sum("billed_cost_cents as revenue_cents")
+    : [];
+  const revenueByMigration = new Map<string, number>(
+    billing.map((b: Record<string, unknown>) => [
+      String(b.migration_id),
+      Number(b.revenue_cents) || 0,
+    ]),
+  );
+
+  res.json(
+    migrations.map((m: Record<string, unknown>) => ({
+      ...m,
+      revenue_cents: revenueByMigration.get(String(m.id)) || 0,
+    })),
+  );
 });
 
 router.get("/users/:id/billing", async (req: AuthRequest, res: Response) => {

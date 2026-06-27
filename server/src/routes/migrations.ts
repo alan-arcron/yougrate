@@ -577,17 +577,30 @@ router.post(
       return;
     }
 
+    // Setup requires Vercel too: this step pushes to GitHub AND creates the
+    // linked Vercel project (without deploying), so we fail fast on a missing or
+    // expired Vercel token before touching GitHub.
+    const user = await db("users").where({ id: req.userId }).first();
+    if (!user?.vercel_access_token) {
+      res.status(400).json({ error: "Vercel not connected" });
+      return;
+    }
+    const vercelToken = decryptSecret(user.vercel_access_token);
+    if ((await vercelService.verifyToken(vercelToken)) === "invalid") {
+      res.status(400).json({ error: vercelService.VERCEL_TOKEN_EXPIRED_MESSAGE });
+      return;
+    }
+
     // Pushing to the ORIGINAL repo (branch/fork modes) requires write access to it.
     // "new" creates a fresh repo under the user's own account, so no check needed.
     if (output_type !== "new") {
-      const pushUser = await db("users").where({ id: req.userId }).first();
-      if (!pushUser?.github_access_token) {
+      if (!user?.github_access_token) {
         res.status(400).json({ error: "GitHub not connected" });
         return;
       }
       try {
         const repoInfo = await githubService.getRepoInfo(
-          decryptSecret(pushUser.github_access_token),
+          decryptSecret(user.github_access_token),
           project.github_repo_full_name,
         );
         if (!repoInfo || !repoInfo.permissions.push) {
@@ -613,7 +626,46 @@ router.post(
         output_type,
         repo_name,
       );
-      res.json(result);
+
+      // Create the linked Vercel project now, seeded with the Supabase env vars
+      // we already collected — but DO NOT deploy. Creating a project with a
+      // linked repo does not trigger a build (Vercel only auto-builds on a NEW
+      // push webhook, which already happened above). The actual build is a
+      // separate, explicit step once the user has added their env vars, so we
+      // only ever deploy once (with all env vars present) instead of building
+      // here and redeploying later.
+      const updated = await db("migrations")
+        .where({ id: migration.id })
+        .first();
+      const repoFullName = String(updated?.output_repo_url || "").replace(
+        "https://github.com/",
+        "",
+      );
+      let vercelProject = await vercelService.getProject(
+        vercelToken,
+        project.name,
+      );
+      if (!vercelProject && repoFullName) {
+        vercelProject = await vercelService.createProject(
+          vercelToken,
+          project.name,
+          repoFullName,
+          {
+            NEXT_PUBLIC_SUPABASE_URL: project.supabase_url || "",
+            NEXT_PUBLIC_SUPABASE_ANON_KEY: project.supabase_anon_key || "",
+            VITE_SUPABASE_URL: project.supabase_url || "",
+            VITE_SUPABASE_ANON_KEY: project.supabase_anon_key || "",
+          },
+        );
+      }
+      await db("projects")
+        .where({ id: project.id })
+        .update({ status: "migrated" });
+
+      res.json({
+        ...result,
+        vercel_project: vercelProject ? { name: vercelProject.name } : null,
+      });
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : String(err);
       let message = raw;
@@ -804,7 +856,7 @@ router.post(
       res.status(404).json({ error: "Not found" });
       return;
     }
-    const { project } = owned;
+    const { migration, project } = owned;
 
     const user = await db("users").where({ id: req.userId }).first();
     if (!user?.vercel_access_token) {
@@ -822,13 +874,31 @@ router.post(
       return;
     }
 
-    // The Vercel project must already exist (created during deploy) before we
-    // can attach env vars to it.
-    const vercelProject = await vercelService.getProject(token, project.name);
+    // The Vercel project is normally created during setup (the push step). If it
+    // somehow doesn't exist yet but the code is pushed, create the linked
+    // project now (no deploy) so env vars can be added before the first build.
+    let vercelProject = await vercelService.getProject(token, project.name);
+    if (!vercelProject && migration.output_repo_url) {
+      const repoFullName = String(migration.output_repo_url).replace(
+        "https://github.com/",
+        "",
+      );
+      vercelProject = await vercelService.createProject(
+        token,
+        project.name,
+        repoFullName,
+        {
+          NEXT_PUBLIC_SUPABASE_URL: project.supabase_url || "",
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: project.supabase_anon_key || "",
+          VITE_SUPABASE_URL: project.supabase_url || "",
+          VITE_SUPABASE_ANON_KEY: project.supabase_anon_key || "",
+        },
+      );
+    }
     if (!vercelProject) {
       res.status(400).json({
         error:
-          "No Vercel project found yet. Deploy your app first, then add environment variables.",
+          "No Vercel project found yet. Set up your deployment (push to GitHub) first, then add environment variables.",
       });
       return;
     }

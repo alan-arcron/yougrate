@@ -38,7 +38,6 @@ import {
   Info,
   ExternalLink,
   TrendingDown,
-  KeyRound,
   Server,
   Zap,
   Upload,
@@ -556,7 +555,9 @@ function VerificationReportCard({
   return (
     <Card
       className={`mb-6 ${
-        highlight ? "border-2 border-green-500/60 shadow-sm" : "border-primary/30"
+        highlight
+          ? "border-2 border-green-500/60 shadow-sm"
+          : "border-primary/30"
       }`}
     >
       <CardHeader>
@@ -600,7 +601,9 @@ function VerificationReportCard({
           <div className="flex items-start gap-2 rounded-md border border-green-300 bg-green-50 p-3 text-xs text-green-800 dark:border-green-900 dark:bg-green-950/20 dark:text-green-300">
             <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" />
             <p className="leading-relaxed">
-              <strong>You&apos;re all set — that&apos;s everything on our end!</strong>{" "}
+              <strong>
+                You&apos;re all set — that&apos;s everything on our end!
+              </strong>{" "}
               Your app is deployed and your environment variables are in place.
               The last thing to do is open your app and click through the checks
               below to make sure everything works.
@@ -844,7 +847,9 @@ export default function MigrationView() {
               (prev === "running" || prev === "analyzing") &&
               data.status === "failed"
             ) {
-              toast.error("Migration failed — check the log below for details.");
+              toast.error(
+                "Migration failed — check the log below for details.",
+              );
             }
           }
           prevStatusRef.current = data.status;
@@ -1025,11 +1030,8 @@ export default function MigrationView() {
       setPushedEnvKeys(res.keys);
       setEnvText("");
       toast.success(
-        `Pushed ${res.count} variable${res.count === 1 ? "" : "s"} to Vercel. Redeploying so they take effect — check the log for details.`,
+        `Pushed ${res.count} variable${res.count === 1 ? "" : "s"} to Vercel. Click "Deploy to Vercel" below when you're ready.`,
       );
-      // Auto-redeploy from GitHub so the new values take effect without a manual
-      // step. No re-push needed — we redeploy the existing repo.
-      await handleDeploy();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(msg);
@@ -1173,10 +1175,11 @@ export default function MigrationView() {
     }
   }
 
-  // Push the migrated code to GitHub, then immediately deploy it from there.
-  // GitHub is the only supported path: Vercel deploys from the repo so future
-  // pushes auto-deploy too.
-  async function handlePushAndDeploy() {
+  // Step 1: push the migrated code to GitHub AND create the linked Vercel
+  // project (seeded with Supabase env vars) — WITHOUT deploying. Deploying is a
+  // separate, explicit step once env vars are in place, so we only ever build
+  // once instead of building here and redeploying after env vars are added.
+  async function handleSetup() {
     setPushing(true);
     setActionError(null);
     try {
@@ -1184,10 +1187,9 @@ export default function MigrationView() {
         output_type: pushType,
         repo_name: repoName.trim() || undefined,
       });
-      toast.success("Code pushed to GitHub. Starting deploy...");
-      await api.post(`/migrations/${migrationId}/deploy`);
-      toast.success("Deploying to Vercel — check the log below for details.");
-      setPollKey((k) => k + 1);
+      toast.success(
+        "Pushed to GitHub and set up Vercel. Add your environment variables, then deploy.",
+      );
       fetchMigration();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1227,13 +1229,14 @@ export default function MigrationView() {
     migration.status === "pending_review" || migration.status === "reviewing";
   const isFailed = migration.status === "failed";
 
-  // Guided post-migration flow: Deploy -> Env vars. Whichever step is "next in
-  // line" gets the green/rocket highlight so users always know what to do next.
+  // Guided post-migration flow: Set up (push + Vercel project, no build) ->
+  // Env vars & Deploy. Whichever step is "next in line" gets the green/rocket
+  // highlight so users always know what to do next.
   const migrationDone = isCompleted || isReviewed || deployed;
-  const envPushed = !!pushedEnvKeys && pushedEnvKeys.length > 0;
+  const isSetUp = !!migration.output_repo_url;
+  const setupStepActive = migrationDone && !isSetUp && !isBuilding && !isFixing;
   const deployStepActive =
-    migrationDone && !deployed && !isBuilding && !isFixing;
-  const envStepActive = deployed && !envPushed;
+    migrationDone && isSetUp && !deployed && !isBuilding && !isFixing;
   // A deploy failed (we have a pushed repo) vs the migration run itself failing
   // (no repo yet). Deploy failures are shown inline so the deploy/env cards stay.
   const deployFailed = isFailed && !!migration.output_repo_url;
@@ -1339,7 +1342,7 @@ export default function MigrationView() {
             }
             platform={migration.detected_platform}
             migrationId={migration.id}
-            highlight={deployed && envPushed}
+            highlight={deployed}
           />
         )}
 
@@ -2157,14 +2160,14 @@ export default function MigrationView() {
         </Card>
       )}
 
-      {/* Deploy step 1: push to GitHub + deploy (GitHub is the only path) */}
+      {/* Step 1: push to GitHub + create the linked Vercel project (no deploy) */}
       {(isCompleted || isReviewed) &&
         !migration.output_repo_url &&
         !isBuilding &&
         !isFixing && (
           <Card
             className={`mb-6 ${
-              deployStepActive
+              setupStepActive
                 ? "border-2 border-green-500/60 shadow-sm"
                 : "border-primary/30"
             }`}
@@ -2172,29 +2175,20 @@ export default function MigrationView() {
             <CardHeader>
               <CardTitle
                 className={`text-lg flex items-center gap-2 ${
-                  deployStepActive ? "text-green-700 dark:text-green-400" : ""
+                  setupStepActive ? "text-green-700 dark:text-green-400" : ""
                 }`}
               >
-                <Rocket className="h-5 w-5" />
-                Deploy to Vercel
-                {deployStepActive && (
+                <GitFork className="h-5 w-5" />
+                Push to GitHub &amp; set up Vercel
+                {setupStepActive && (
                   <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
                     Next step
                   </span>
                 )}
               </CardTitle>
               <CardDescription>
-                We push your migrated code to GitHub and deploy it to Vercel from
-                there, so every change you push later auto-deploys. Make sure
-                GitHub and Vercel are connected first &mdash; Vercel needs its
-                GitHub integration installed (see{" "}
-                <Link
-                  to="/settings"
-                  className="text-primary hover:underline"
-                >
-                  Settings
-                </Link>
-                ).
+                Push the migrated code to your Github account and create a new
+                Vercel project.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -2207,7 +2201,7 @@ export default function MigrationView() {
                       couldn&apos;t set them up automatically, so your app will
                       deploy but won&apos;t work until the tables exist. Resolve
                       the <strong>Create Tables in Supabase</strong> step above
-                      before deploying.
+                      first.
                     </p>
                   </div>
                 )}
@@ -2241,274 +2235,249 @@ export default function MigrationView() {
                     className="mt-1"
                   />
                   <p className="text-xs text-muted-foreground mt-1">
-                    A new private repo will be created under your GitHub account.
+                    A new private repo will be created under your GitHub
+                    account.
                   </p>
                 </div>
               )}
 
               <Button
-                onClick={handlePushAndDeploy}
-                disabled={
-                  pushing ||
-                  deploying ||
-                  (pushType === "new" && !repoName.trim())
-                }
+                onClick={handleSetup}
+                disabled={pushing || (pushType === "new" && !repoName.trim())}
               >
-                {pushing || deploying ? (
+                {pushing ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
-                  <Rocket className="mr-2 h-4 w-4" />
+                  <GitFork className="mr-2 h-4 w-4" />
                 )}
-                {pushing
-                  ? "Pushing to GitHub..."
-                  : deploying
-                    ? "Deploying..."
-                    : "Push & Deploy to Vercel"}
+                {pushing ? "Setting up..." : "Push to GitHub & set up Vercel"}
               </Button>
             </CardContent>
           </Card>
         )}
 
-      {/* Deploy step 1 (pushed): deploy / retry / redeploy from the GitHub repo */}
-      {migration.output_repo_url && (
-        <Card
-          className={`mb-6 ${
-            deployStepActive
-              ? "border-2 border-green-500/60 shadow-sm"
-              : deployFailed
-                ? "border-2 border-destructive/50"
-                : ""
-          }`}
-        >
-          <CardHeader>
-            <CardTitle
-              className={`text-lg flex items-center gap-2 ${
-                deployStepActive ? "text-green-700 dark:text-green-400" : ""
-              }`}
-            >
-              {deployed ? (
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-              ) : (
-                <Rocket className="h-5 w-5" />
-              )}
-              {deployed ? "Deployed to Vercel" : "Deploy to Vercel"}
-              {deployStepActive && (
-                <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
-                  Next step
-                </span>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div>
-              <p className="text-sm text-muted-foreground">Repository</p>
-              <a
-                href={migration.output_repo_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-primary hover:underline font-mono"
-              >
-                {migration.output_repo_url}
-              </a>
-            </div>
-            {migration.output_branch && (
-              <div>
-                <p className="text-sm text-muted-foreground">Branch</p>
-                <p className="text-sm font-mono">{migration.output_branch}</p>
-              </div>
-            )}
-
-            {migration.schema_error &&
-              !(migration.schema_applied || schemaApplied) && (
-                <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
-                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                  <p className="leading-relaxed">
-                    <strong>Create your database tables first.</strong> Your app
-                    will deploy but won&apos;t work until the tables exist &mdash;
-                    resolve the <strong>Create Tables in Supabase</strong> step
-                    above.
-                  </p>
-                </div>
-              )}
-
-            {deployFailed && (
-              <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
-                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <div className="leading-relaxed">
-                  <p>
-                    <strong>Deployment failed.</strong>{" "}
-                    {migration.error_message}
-                  </p>
-                  <p className="mt-0.5">
-                    Check the log below for details. You can retry without
-                    pushing your code again.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {(isBuilding || isFixing) && (
-              <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Deploying&hellip; check the log below for details.
-              </p>
-            )}
-
-            {!isBuilding &&
-              !isFixing &&
-              (deployed ? (
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 text-green-600">
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span className="text-sm font-medium">
-                      Deployed successfully
-                    </span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleDeploy}
-                    disabled={deploying}
-                  >
-                    {deploying ? (
-                      <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                    ) : (
-                      <Rocket className="mr-2 h-3 w-3" />
-                    )}
-                    {deploying ? "Redeploying..." : "Redeploy"}
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  variant={deployFailed ? "default" : "outline"}
-                  onClick={handleDeploy}
-                  disabled={deploying}
-                >
-                  {deploying ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Rocket className="mr-2 h-4 w-4" />
-                  )}
-                  {deploying
-                    ? "Deploying..."
-                    : deployFailed
-                      ? "Retry Deployment"
-                      : "Deploy from GitHub"}
-                </Button>
-              ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Environment variable transfer */}
-      {(deployed || deployFailed) &&
+      {/* Step 2: environment variables + a single explicit deploy */}
+      {migration.output_repo_url &&
         (() => {
           const previewKeys = previewEnvKeys(envText);
           return (
             <Card
               className={`mb-6 ${
-                envStepActive ? "border-2 border-green-500/60 shadow-sm" : ""
+                deployStepActive
+                  ? "border-2 border-green-500/60 shadow-sm"
+                  : deployFailed
+                    ? "border-2 border-destructive/50"
+                    : ""
               }`}
             >
               <CardHeader>
                 <CardTitle
                   className={`text-lg flex items-center gap-2 ${
-                    envStepActive ? "text-green-700 dark:text-green-400" : ""
+                    deployStepActive ? "text-green-700 dark:text-green-400" : ""
                   }`}
                 >
-                  {envStepActive ? (
-                    <Rocket className="h-5 w-5" />
+                  {deployed ? (
+                    <CheckCircle2 className="h-5 w-5 text-green-600" />
                   ) : (
-                    <KeyRound className="h-5 w-5 text-muted-foreground" />
+                    <Rocket className="h-5 w-5" />
                   )}
-                  Environment Variables
-                  {envStepActive && (
+                  {deployed
+                    ? "Deployed to Vercel"
+                    : "Add environment variables & deploy"}
+                  {deployStepActive && (
                     <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
                       Next step
                     </span>
                   )}
                 </CardTitle>
                 <CardDescription>
-                  Paste your <code className="text-xs">.env</code> (or choose a
-                  file) to push every variable to Vercel at once. Values are
-                  sent straight to Vercel and are never stored by Yougrate.
+                  Add your environment variables, then deploy. Supabase is
+                  already set.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <textarea
-                  value={envText}
-                  onChange={(e) => setEnvText(e.target.value)}
-                  placeholder={
-                    "API_KEY=sk-...\nDATABASE_URL=postgres://...\nNEXT_PUBLIC_FOO=bar"
-                  }
-                  spellCheck={false}
-                  className="w-full min-h-[140px] rounded-md border border-input bg-white px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                />
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="inline-flex">
-                    <input
-                      type="file"
-                      onChange={handleEnvFile}
-                      className="hidden"
-                    />
-                    <span className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium cursor-pointer hover:bg-accent">
-                      <Upload className="h-3.5 w-3.5" />
-                      Choose .env file
-                    </span>
-                  </label>
-                  <span className="text-[11px] text-muted-foreground">
-                    Tip: <code>.env</code> files are hidden &mdash; on macOS
-                    press
-                    <kbd className="px-1">⌘</kbd>+
-                    <kbd className="px-1">shift</kbd>+
-                    <kbd className="px-1">.</kbd> in the picker, or just paste
-                    above.
-                  </span>
-                  <Button
-                    size="sm"
-                    onClick={handlePushEnv}
-                    disabled={pushingEnv || previewKeys.length === 0}
+                <div>
+                  <p className="text-sm text-muted-foreground">Repository</p>
+                  <a
+                    href={migration.output_repo_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-primary hover:underline font-mono"
                   >
-                    {pushingEnv ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Rocket className="mr-2 h-4 w-4" />
-                    )}
-                    {pushingEnv
-                      ? "Pushing..."
-                      : previewKeys.length > 0
-                        ? `Push ${previewKeys.length} variable${previewKeys.length === 1 ? "" : "s"} to Vercel`
-                        : "Push to Vercel"}
-                  </Button>
+                    {migration.output_repo_url}
+                  </a>
                 </div>
-
-                {previewKeys.length > 0 && (
-                  <div className="text-xs text-muted-foreground">
-                    <span className="font-medium">Detected keys:</span>{" "}
-                    <span className="font-mono">{previewKeys.join(", ")}</span>
-                  </div>
-                )}
-
-                {pushedEnvKeys && pushedEnvKeys.length > 0 && (
-                  <div className="flex items-start gap-2 rounded-md border border-green-300 bg-green-50 p-2.5 text-xs text-green-800">
-                    <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                    <p className="leading-relaxed">
-                      Pushed to Vercel:{" "}
-                      <span className="font-mono">
-                        {pushedEnvKeys.join(", ")}
-                      </span>
-                      . We&apos;re redeploying your app automatically so the new
-                      values take effect.
+                {migration.output_branch && (
+                  <div>
+                    <p className="text-sm text-muted-foreground">Branch</p>
+                    <p className="text-sm font-mono">
+                      {migration.output_branch}
                     </p>
                   </div>
                 )}
 
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Stored on Vercel as &ldquo;sensitive&rdquo; variables (they
-                  can&apos;t be read back out). Existing keys with the same name
-                  are overwritten.
-                </p>
+                {migration.schema_error &&
+                  !(migration.schema_applied || schemaApplied) && (
+                    <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                      <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <p className="leading-relaxed">
+                        <strong>Create your database tables first.</strong> Your
+                        app will deploy but won&apos;t work until the tables
+                        exist &mdash; resolve the{" "}
+                        <strong>Create Tables in Supabase</strong> step above.
+                      </p>
+                    </div>
+                  )}
+
+                {/* Environment variables */}
+                <div className="space-y-3 rounded-md border border-border/60 p-3">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Environment variables
+                  </p>
+                  <textarea
+                    value={envText}
+                    onChange={(e) => setEnvText(e.target.value)}
+                    placeholder={
+                      "API_KEY=sk-...\nDATABASE_URL=postgres://...\nVITE_FOO=bar"
+                    }
+                    spellCheck={false}
+                    className="w-full min-h-[120px] rounded-md border border-input bg-white px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex">
+                      <input
+                        type="file"
+                        onChange={handleEnvFile}
+                        className="hidden"
+                      />
+                      <span className="inline-flex items-center gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium cursor-pointer hover:bg-accent">
+                        <Upload className="h-3.5 w-3.5" />
+                        Choose .env file
+                      </span>
+                    </label>
+                    <span className="text-[11px] text-muted-foreground">
+                      Tip: <code>.env</code> files are hidden &mdash; on macOS
+                      press
+                      <kbd className="px-1">⌘</kbd>+
+                      <kbd className="px-1">shift</kbd>+
+                      <kbd className="px-1">.</kbd> in the picker, or just paste
+                      above.
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handlePushEnv}
+                      disabled={pushingEnv || previewKeys.length === 0}
+                    >
+                      {pushingEnv ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Upload className="mr-2 h-4 w-4" />
+                      )}
+                      {pushingEnv
+                        ? "Pushing..."
+                        : previewKeys.length > 0
+                          ? `Push ${previewKeys.length} variable${previewKeys.length === 1 ? "" : "s"} to Vercel`
+                          : "Push to Vercel"}
+                    </Button>
+                  </div>
+
+                  {previewKeys.length > 0 && (
+                    <div className="text-xs text-muted-foreground">
+                      <span className="font-medium">Detected keys:</span>{" "}
+                      <span className="font-mono">
+                        {previewKeys.join(", ")}
+                      </span>
+                    </div>
+                  )}
+
+                  {pushedEnvKeys && pushedEnvKeys.length > 0 && (
+                    <div className="flex items-start gap-2 rounded-md border border-green-300 bg-green-50 p-2.5 text-xs text-green-800">
+                      <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <p className="leading-relaxed">
+                        Pushed to Vercel:{" "}
+                        <span className="font-mono">
+                          {pushedEnvKeys.join(", ")}
+                        </span>
+                        . {deployed ? "Redeploy" : "Deploy"} below to apply
+                        them.
+                      </p>
+                    </div>
+                  )}
+
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Sent straight to Vercel, never stored by Yougrate.
+                  </p>
+                </div>
+
+                {/* Deploy */}
+                {deployFailed && (
+                  <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <div className="leading-relaxed">
+                      <p>
+                        <strong>Deployment failed.</strong>{" "}
+                        {migration.error_message}
+                      </p>
+                      <p className="mt-0.5">
+                        Check the log below for details. Fix your env vars if
+                        needed and retry &mdash; no need to push your code
+                        again.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {(isBuilding || isFixing) && (
+                  <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Deploying&hellip; check the log below for details.
+                  </p>
+                )}
+
+                {!isBuilding &&
+                  !isFixing &&
+                  (deployed ? (
+                    <div className="flex items-center gap-3 pt-1">
+                      <div className="flex items-center gap-2 text-green-600">
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span className="text-sm font-medium">
+                          Deployed successfully
+                        </span>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleDeploy}
+                        disabled={deploying}
+                      >
+                        {deploying ? (
+                          <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Rocket className="mr-2 h-3 w-3" />
+                        )}
+                        {deploying ? "Redeploying..." : "Redeploy"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      onClick={handleDeploy}
+                      disabled={deploying}
+                      className="w-full sm:w-auto"
+                    >
+                      {deploying ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Rocket className="mr-2 h-4 w-4" />
+                      )}
+                      {deploying
+                        ? "Deploying..."
+                        : deployFailed
+                          ? "Retry Deployment"
+                          : "Deploy to Vercel"}
+                    </Button>
+                  ))}
               </CardContent>
             </Card>
           );
