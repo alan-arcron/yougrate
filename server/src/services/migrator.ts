@@ -124,6 +124,11 @@ export async function ensureVerificationReport(
 
 function friendlyError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
+  // Already-clean Vercel messages (e.g. expired token) pass through untouched so
+  // they aren't misclassified as an AI auth error by the checks below.
+  if (raw === vercel.VERCEL_TOKEN_EXPIRED_MESSAGE || raw.startsWith("Vercel:")) {
+    return raw;
+  }
   if (raw.includes("529") || raw.includes("overloaded")) {
     return "The AI model is temporarily at capacity. Please try again in a few minutes.";
   }

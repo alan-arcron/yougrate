@@ -448,7 +448,7 @@ export default function Landing() {
           <p className="mt-6 text-sm text-muted-foreground">
             More platforms coming soon. Using something else?{" "}
             <a
-              href="mailto:hello@yougrate.com"
+              href="mailto:yougrate@arcron.systems"
               className="text-primary hover:underline"
             >
               Let us know

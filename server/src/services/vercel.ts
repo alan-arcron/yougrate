@@ -19,10 +19,19 @@ export async function vercelFetch(token: string, path: string, options: RequestI
   });
 }
 
-/** Turn a Vercel error response body into a clean, user-facing message. */
+/** Shown whenever the Vercel API token is expired, revoked, or unauthorized. */
+export const VERCEL_TOKEN_EXPIRED_MESSAGE =
+  'Your Vercel token has expired or was revoked. Reconnect Vercel in Settings — create a new token scoped to your full account ("No workspace") — and try again.';
+
+/**
+ * Turn a Vercel error response body into a clean, user-facing message. Pass the
+ * HTTP status when available so auth failures (401/403) are reported clearly as
+ * an expired/revoked token rather than a cryptic generic error.
+ */
 export function vercelErrorMessage(
   body: Record<string, unknown>,
   fallback: string,
+  status?: number,
 ): string {
   const e = (body?.error ?? {}) as Record<string, unknown>;
   const code = typeof e.code === "string" ? e.code : "";
@@ -32,6 +41,7 @@ export function vercelErrorMessage(
   // The Vercel GitHub App isn't installed / GitHub isn't connected to the
   // Vercel account, so Vercel can't link the repository. This is fixable by the
   // user in a minute — or they can just use the no-GitHub direct deploy.
+  // Checked before the token case because GitHub errors can also be 403s.
   if (
     /install the GitHub integration|GitHub App|Install GitHub App/i.test(
       message,
@@ -44,6 +54,18 @@ export function vercelErrorMessage(
       "(2) install the Vercel GitHub App at https://github.com/apps/vercel with access to all repositories. " +
       "Or skip GitHub entirely and use \"Deploy directly to Vercel\" — no GitHub required."
     );
+  }
+
+  // Expired / revoked / unauthorized API token.
+  if (
+    status === 401 ||
+    status === 403 ||
+    /^(forbidden|invalid_token|not_authorized|unauthorized)$/i.test(code) ||
+    /\b(token (is )?(expired|revoked|invalid)|not authorized|unauthorized)\b/i.test(
+      message,
+    )
+  ) {
+    return VERCEL_TOKEN_EXPIRED_MESSAGE;
   }
 
   if (message) {
@@ -107,7 +129,7 @@ export async function createProject(
   if (!res.ok) {
     const err = await res.json() as Record<string, unknown>;
     throw new Error(
-      vercelErrorMessage(err, `Vercel API error: ${JSON.stringify(err)}`),
+      vercelErrorMessage(err, `Vercel API error: ${JSON.stringify(err)}`, res.status),
     );
   }
 
@@ -139,7 +161,7 @@ export async function triggerDeployment(
   if (!res.ok) {
     const err = await res.json() as Record<string, unknown>;
     throw new Error(
-      vercelErrorMessage(err, `Vercel deploy error: ${JSON.stringify(err)}`),
+      vercelErrorMessage(err, `Vercel deploy error: ${JSON.stringify(err)}`, res.status),
     );
   }
 
@@ -237,9 +259,12 @@ export async function upsertEnvVars(
   );
 
   if (!res.ok) {
-    const err = (await res.json()) as Record<string, unknown>;
-    // Note: do not include `body` (contains secret values) in the error.
-    throw new Error(`Vercel env API error: ${JSON.stringify(err)}`);
+    const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    // Note: `err` is the Vercel response body (no secrets); we never include the
+    // submitted `body`, which contains the secret values.
+    throw new Error(
+      vercelErrorMessage(err, `Vercel env API error: ${JSON.stringify(err)}`, res.status),
+    );
   }
 
   return entries.map(([key]) => key);
@@ -268,7 +293,7 @@ export async function ensureProject(
   if (!res.ok) {
     const err = (await res.json()) as Record<string, unknown>;
     throw new Error(
-      vercelErrorMessage(err, `Vercel API error: ${JSON.stringify(err)}`),
+      vercelErrorMessage(err, `Vercel API error: ${JSON.stringify(err)}`, res.status),
     );
   }
   return (await res.json()) as VercelProject;
@@ -306,7 +331,7 @@ export async function uploadDeploymentFile(
   if (!res.ok && res.status !== 409) {
     const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     throw new Error(
-      vercelErrorMessage(err, `Vercel file upload error: ${JSON.stringify(err)}`),
+      vercelErrorMessage(err, `Vercel file upload error: ${JSON.stringify(err)}`, res.status),
     );
   }
 
@@ -342,7 +367,7 @@ export async function createFileDeployment(
   if (!res.ok) {
     const err = (await res.json()) as Record<string, unknown>;
     throw new Error(
-      vercelErrorMessage(err, `Vercel deploy error: ${JSON.stringify(err)}`),
+      vercelErrorMessage(err, `Vercel deploy error: ${JSON.stringify(err)}`, res.status),
     );
   }
 

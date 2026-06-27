@@ -659,6 +659,15 @@ router.post(
       return;
     }
 
+    if (
+      (await vercelService.verifyToken(
+        decryptSecret(user.vercel_access_token),
+      )) === "invalid"
+    ) {
+      res.status(400).json({ error: vercelService.VERCEL_TOKEN_EXPIRED_MESSAGE });
+      return;
+    }
+
     try {
       await db("migrations")
         .where({ id: migration.id })
@@ -714,9 +723,10 @@ router.post(
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : String(err);
       let message = raw;
-      if (raw.includes("not_authorized") || raw.includes("403")) {
-        message =
-          "Vercel authorization failed. Please reconnect your Vercel account.";
+      if (raw === vercelService.VERCEL_TOKEN_EXPIRED_MESSAGE) {
+        message = raw;
+      } else if (raw.includes("not_authorized") || raw.includes("403")) {
+        message = vercelService.VERCEL_TOKEN_EXPIRED_MESSAGE;
       } else if (raw.includes("already exists") || raw.includes("conflict")) {
         message =
           "A Vercel project with this name already exists. Try renaming your project.";
@@ -761,6 +771,15 @@ router.post(
       return;
     }
 
+    if (
+      (await vercelService.verifyToken(
+        decryptSecret(user.vercel_access_token),
+      )) === "invalid"
+    ) {
+      res.status(400).json({ error: vercelService.VERCEL_TOKEN_EXPIRED_MESSAGE });
+      return;
+    }
+
     await db("migrations").where({ id: migration.id }).update({
       status: "building",
       error_message: null,
@@ -795,6 +814,14 @@ router.post(
 
     const token = decryptSecret(user.vercel_access_token);
 
+    // Fail fast with a clear message if the token is expired/revoked — otherwise
+    // getProject() below silently returns null and we'd misreport it as "no
+    // Vercel project found yet."
+    if ((await vercelService.verifyToken(token)) === "invalid") {
+      res.status(400).json({ error: vercelService.VERCEL_TOKEN_EXPIRED_MESSAGE });
+      return;
+    }
+
     // The Vercel project must already exist (created during deploy) before we
     // can attach env vars to it.
     const vercelProject = await vercelService.getProject(token, project.name);
@@ -824,11 +851,14 @@ router.post(
       res.json({ keys, count: keys.length });
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : String(err);
-      let message = "Failed to push environment variables to Vercel.";
-      if (raw.includes("not_authorized") || raw.includes("403")) {
-        message =
-          "Vercel authorization failed. Please reconnect your Vercel account.";
-      }
+      // upsertEnvVars already maps token/auth failures to a clear message; only
+      // fall back to a generic line when we got something unrecognized.
+      const recognized =
+        raw === vercelService.VERCEL_TOKEN_EXPIRED_MESSAGE ||
+        raw.startsWith("Vercel:");
+      const message = recognized
+        ? raw
+        : "Failed to push environment variables to Vercel.";
       // raw may echo the Vercel error body but never the submitted values.
       console.error("[env] Error:", redactSecrets(raw));
       res.status(500).json({ error: message });
