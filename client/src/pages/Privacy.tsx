@@ -15,7 +15,7 @@ export default function Privacy() {
 
         <h1 className="text-3xl font-bold mb-2">Privacy Policy</h1>
         <p className="text-sm text-muted-foreground mb-10">
-          Last updated: June 15, 2026
+          Last updated: June 27, 2026
         </p>
 
         <div className="prose prose-sm dark:prose-invert max-w-none space-y-8">
@@ -37,8 +37,8 @@ export default function Privacy() {
             <ul className="space-y-2 text-muted-foreground">
               <li>
                 <strong>Account information:</strong> Email address, display
-                name, and avatar URL provided by your authentication provider
-                (GitHub or email signup).
+                name, and avatar URL provided by GitHub, our sole
+                authentication provider.
               </li>
               <li>
                 <strong>GitHub credentials:</strong> OAuth access token and

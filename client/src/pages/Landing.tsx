@@ -69,7 +69,7 @@ const FEATURES = [
     icon: Rocket,
     title: "One-Click Deploy",
     description:
-      "Deploys straight to Vercel production with your Supabase environment variables configured automatically.",
+      "Pushes to GitHub and deploys to Vercel production with your Supabase environment variables configured automatically — so every future change auto-deploys too.",
   },
   {
     icon: Server,

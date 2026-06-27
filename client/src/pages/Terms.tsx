@@ -15,7 +15,7 @@ export default function Terms() {
 
         <h1 className="text-3xl font-bold mb-2">Terms of Service</h1>
         <p className="text-sm text-muted-foreground mb-10">
-          Last updated: May 21, 2026
+          Last updated: June 27, 2026
         </p>
 
         <div className="prose prose-sm dark:prose-invert max-w-none space-y-8">
@@ -33,12 +33,13 @@ export default function Terms() {
           <section>
             <h2 className="text-xl font-semibold mb-3">2. Account Terms</h2>
             <p className="text-muted-foreground leading-relaxed">
-              You may create an account using GitHub OAuth or email and
-              password, authenticated through Supabase. You are responsible for
-              maintaining the security of your login credentials and any
-              connected third-party tokens (GitHub, Vercel). You must be at
-              least 18 years old or the age of majority in your jurisdiction to
-              use this service.
+              Accounts are created exclusively through GitHub authentication
+              (GitHub OAuth). We do not offer email-and-password sign-in or any
+              other login method, so a GitHub account is required to use
+              Yougrate. You are responsible for maintaining the security of your
+              GitHub account and any connected third-party tokens (GitHub,
+              Vercel). You must be at least 18 years old or the age of majority
+              in your jurisdiction to use this service.
             </p>
           </section>
 

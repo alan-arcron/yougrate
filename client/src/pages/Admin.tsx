@@ -883,132 +883,169 @@ export default function Admin() {
                                       </div>
                                     ) : migrationDetail ? (
                                       <>
-                                        {/* What the customer pays */}
-                                        {migrationDetail.customer_price && (
-                                          <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
-                                            <div className="flex items-center justify-between mb-2">
-                                              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                                                What the customer pays
+                                        {/* Cost & pricing */}
+                                        {(() => {
+                                          const cp =
+                                            migrationDetail.customer_price;
+                                          const estimated = cp?.estimated;
+                                          const analysisCost =
+                                            migrationDetail.analysis_cost_cents;
+                                          const migrationCost =
+                                            migrationDetail.migration_cost_cents;
+                                          const totalSpend =
+                                            migrationDetail.raw_cost_cents;
+                                          const baseFee = cp?.base_fee_cents || 0;
+                                          const markupFee =
+                                            cp?.token_billed_cents || 0;
+                                          const codeReview =
+                                            cp?.addon_code_review_cents || 0;
+                                          const totalPaid = estimated
+                                            ? cp.total_cents
+                                            : 0;
+                                          const margin = totalPaid - totalSpend;
+                                          const marginPct =
+                                            totalPaid > 0
+                                              ? (margin / totalPaid) * 100
+                                              : null;
+                                          return (
+                                            <div>
+                                              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                                                Cost &amp; Pricing
                                               </p>
-                                              {migrationDetail.customer_price
-                                                .estimated ? (
-                                                <p className="text-lg font-mono font-bold text-primary">
-                                                  $
-                                                  {(
-                                                    migrationDetail.customer_price
-                                                      .total_cents / 100
-                                                  ).toFixed(2)}
-                                                </p>
-                                              ) : (
-                                                <Badge
-                                                  variant="secondary"
-                                                  className="text-[10px]"
-                                                >
-                                                  Not estimated yet
-                                                </Badge>
-                                              )}
-                                            </div>
-                                            {migrationDetail.customer_price
-                                              .estimated ? (
-                                              <>
-                                                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground font-mono">
-                                                  <span>
-                                                    Base fee $
-                                                    {(
-                                                      migrationDetail
-                                                        .customer_price
-                                                        .base_fee_cents / 100
-                                                    ).toFixed(2)}
-                                                  </span>
-                                                  <span>
-                                                    + AI tokens $
-                                                    {(
-                                                      migrationDetail
-                                                        .customer_price
-                                                        .token_billed_cents / 100
-                                                    ).toFixed(2)}
-                                                  </span>
-                                                  {migrationDetail.customer_price
-                                                    .addon_code_review_cents >
-                                                    0 && (
-                                                    <span>
-                                                      + Code review $
-                                                      {(
-                                                        migrationDetail
-                                                          .customer_price
-                                                          .addon_code_review_cents /
-                                                        100
-                                                      ).toFixed(2)}
-                                                    </span>
+                                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                {/* Total token spend (our Anthropic cost) */}
+                                                <div className="rounded-lg border bg-muted/40 p-3">
+                                                  <p className="text-xs text-muted-foreground">
+                                                    Total token spend
+                                                  </p>
+                                                  <p className="text-lg font-mono font-bold text-orange-600">
+                                                    $
+                                                    {(totalSpend / 100).toFixed(
+                                                      2,
+                                                    )}
+                                                  </p>
+                                                  <div className="mt-2 space-y-1 text-xs font-mono text-muted-foreground">
+                                                    <div className="flex justify-between gap-3">
+                                                      <span>Analysis tokens</span>
+                                                      <span>
+                                                        $
+                                                        {(
+                                                          analysisCost / 100
+                                                        ).toFixed(2)}
+                                                      </span>
+                                                    </div>
+                                                    <div className="flex justify-between gap-3">
+                                                      <span>
+                                                        Migration tokens
+                                                      </span>
+                                                      <span>
+                                                        $
+                                                        {(
+                                                          migrationCost / 100
+                                                        ).toFixed(2)}
+                                                      </span>
+                                                    </div>
+                                                  </div>
+                                                </div>
+
+                                                {/* Total the customer paid */}
+                                                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                                                  <p className="text-xs text-muted-foreground">
+                                                    Total customer paid
+                                                  </p>
+                                                  {estimated ? (
+                                                    <>
+                                                      <p className="text-lg font-mono font-bold text-primary">
+                                                        $
+                                                        {(
+                                                          totalPaid / 100
+                                                        ).toFixed(2)}
+                                                      </p>
+                                                      <div className="mt-2 space-y-1 text-xs font-mono text-muted-foreground">
+                                                        <div className="flex justify-between gap-3">
+                                                          <span>Base fee</span>
+                                                          <span>
+                                                            $
+                                                            {(
+                                                              baseFee / 100
+                                                            ).toFixed(2)}
+                                                          </span>
+                                                        </div>
+                                                        <div className="flex justify-between gap-3">
+                                                          <span>
+                                                            Token markup fee
+                                                          </span>
+                                                          <span>
+                                                            $
+                                                            {(
+                                                              markupFee / 100
+                                                            ).toFixed(2)}
+                                                          </span>
+                                                        </div>
+                                                        {codeReview > 0 && (
+                                                          <div className="flex justify-between gap-3">
+                                                            <span>
+                                                              Code review
+                                                            </span>
+                                                            <span>
+                                                              $
+                                                              {(
+                                                                codeReview / 100
+                                                              ).toFixed(2)}
+                                                            </span>
+                                                          </div>
+                                                        )}
+                                                      </div>
+                                                    </>
+                                                  ) : (
+                                                    <Badge
+                                                      variant="secondary"
+                                                      className="text-[10px] mt-1"
+                                                    >
+                                                      Not estimated yet
+                                                    </Badge>
                                                   )}
                                                 </div>
-                                                <p className="text-[11px] text-muted-foreground mt-1.5">
-                                                  {migrationDetail.customer_price
-                                                    .charged_cents > 0
-                                                    ? `Collected so far: $${(
-                                                        migrationDetail
-                                                          .customer_price
-                                                          .charged_cents / 100
-                                                      ).toFixed(
-                                                        2,
-                                                      )} (quoted up front; this is the estimate they were charged)`
-                                                    : "Quoted estimate — not paid yet."}
-                                                </p>
-                                              </>
-                                            ) : (
-                                              <p className="text-xs text-muted-foreground">
-                                                Pricing appears once analysis
-                                                finishes and produces a token
-                                                estimate.
-                                              </p>
-                                            )}
-                                          </div>
-                                        )}
+                                              </div>
 
-                                        {/* Cost comparison */}
-                                        <div>
-                                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Cost Breakdown</p>
-                                          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-                                            <div className="bg-muted/50 rounded p-2">
-                                              <p className="text-xs text-muted-foreground">Analysis</p>
-                                              <p className="text-sm font-mono font-medium">
-                                                {((migrationDetail.analysis_input_tokens + migrationDetail.analysis_output_tokens) / 1000).toFixed(0)}k tok
-                                              </p>
-                                              <p className="text-xs font-mono text-orange-600">
-                                                ${(migrationDetail.analysis_cost_cents / 100).toFixed(2)}
-                                              </p>
-                                            </div>
-                                            <div className="bg-muted/50 rounded p-2">
-                                              <p className="text-xs text-muted-foreground">API Cost</p>
-                                              <p className="text-sm font-mono font-medium text-orange-600">${(migrationDetail.raw_cost_cents / 100).toFixed(2)}</p>
-                                              <p className="text-xs font-mono text-muted-foreground">
-                                                analysis ${(migrationDetail.analysis_cost_cents / 100).toFixed(2)} + run ${(migrationDetail.migration_cost_cents / 100).toFixed(2)}
-                                              </p>
-                                            </div>
-                                            <div className="bg-muted/50 rounded p-2">
-                                              <p className="text-xs text-muted-foreground">Billed</p>
-                                              <p className="text-sm font-mono font-medium text-muted-foreground">${(migrationDetail.actual_cost_cents / 100).toFixed(2)}</p>
-                                            </div>
-                                            <div className="bg-muted/50 rounded p-2">
-                                              <p className="text-xs text-muted-foreground">Revenue</p>
-                                              <p className="text-sm font-mono font-medium">${(migrationDetail.revenue_cents / 100).toFixed(2)}</p>
-                                            </div>
-                                            <div className="bg-muted/50 rounded p-2">
-                                              <p className="text-xs text-muted-foreground">Margin</p>
-                                              <p className={`text-sm font-mono font-medium ${migrationDetail.margin_cents >= 0 ? "text-green-600" : "text-red-600"}`}>
-                                                ${(migrationDetail.margin_cents / 100).toFixed(2)}
-                                              </p>
-                                            </div>
-                                            <div className="bg-muted/50 rounded p-2">
-                                              <p className="text-xs text-muted-foreground">Markup</p>
-                                              <p className="text-sm font-mono font-medium">
-                                                {migrationDetail.raw_cost_cents > 0
-                                                  ? `${(migrationDetail.revenue_cents / migrationDetail.raw_cost_cents).toFixed(1)}x`
-                                                  : "—"}
+                                              {estimated && (
+                                                <div className="flex items-center gap-6 mt-3">
+                                                  <div>
+                                                    <span className="text-xs text-muted-foreground">
+                                                      Margin{" "}
+                                                    </span>
+                                                    <span
+                                                      className={`text-sm font-mono font-medium ${margin >= 0 ? "text-green-600" : "text-red-600"}`}
+                                                    >
+                                                      $
+                                                      {(margin / 100).toFixed(2)}
+                                                    </span>
+                                                  </div>
+                                                  <div>
+                                                    <span className="text-xs text-muted-foreground">
+                                                      Margin %{" "}
+                                                    </span>
+                                                    <span
+                                                      className={`text-sm font-mono font-medium ${marginPct === null ? "text-muted-foreground" : marginPct >= 0 ? "text-green-600" : "text-red-600"}`}
+                                                    >
+                                                      {marginPct === null
+                                                        ? "—"
+                                                        : `${marginPct.toFixed(0)}%`}
+                                                    </span>
+                                                  </div>
+                                                </div>
+                                              )}
+
+                                              <p className="text-[11px] text-muted-foreground mt-1.5">
+                                                {!estimated
+                                                  ? "Pricing appears once analysis finishes and produces a token estimate."
+                                                  : cp.charged_cents > 0
+                                                    ? `Collected so far: $${(cp.charged_cents / 100).toFixed(2)} (quoted up front; this is the estimate they were charged).`
+                                                    : "Quoted estimate — not paid yet."}
                                               </p>
                                             </div>
-                                          </div>
-                                        </div>
+                                          );
+                                        })()}
 
                                         {/* Token breakdown */}
                                         <div>

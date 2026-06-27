@@ -21,7 +21,7 @@ export async function vercelFetch(token: string, path: string, options: RequestI
 
 /** Shown whenever the Vercel API token is expired, revoked, or unauthorized. */
 export const VERCEL_TOKEN_EXPIRED_MESSAGE =
-  'Your Vercel token has expired or was revoked. Reconnect Vercel in Settings — create a new token scoped to your full account ("No workspace") — and try again.';
+  "Your Vercel token has expired or was revoked. Reconnect Vercel in Settings.";
 
 /**
  * Turn a Vercel error response body into a clean, user-facing message. Pass the

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useNavigate,
   useParams,
@@ -739,7 +739,6 @@ export default function MigrationView() {
   const [paying, setPaying] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [deploying, setDeploying] = useState(false);
-  const [deployingDirect, setDeployingDirect] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pollKey, setPollKey] = useState(0);
   const [repoName, setRepoName] = useState("");
@@ -774,6 +773,9 @@ export default function MigrationView() {
   const [downloadingReview, setDownloadingReview] = useState(false);
   const [pushingReview, setPushingReview] = useState(false);
   const [reviewBranchUrl, setReviewBranchUrl] = useState<string | null>(null);
+  // Tracks the last-seen status so polling can fire success/failure toasts on
+  // transitions (migration run finishing, deploy finishing/failing).
+  const prevStatusRef = useRef<string | null>(null);
 
   async function fetchMigration() {
     try {
@@ -818,9 +820,34 @@ export default function MigrationView() {
             clearInterval(interval);
             interval = null;
           }
-          if (data.status === "completed" && migration?.status === "running") {
-            toast.success("Migration completed successfully!");
+
+          // Fire toasts on status transitions. We track the previous status in a
+          // ref so this works reliably across polls and poll restarts.
+          const prev = prevStatusRef.current;
+          if (prev && prev !== data.status) {
+            if (prev === "running" && data.status === "completed") {
+              toast.success("Migration completed successfully!");
+            } else if (
+              (prev === "building" || prev === "fixing") &&
+              data.status === "completed" &&
+              data.is_deployed
+            ) {
+              toast.success("Deployed to Vercel successfully!");
+            } else if (
+              (prev === "building" || prev === "fixing") &&
+              data.status === "failed"
+            ) {
+              toast.error(
+                "Deployment failed — check the log below for details.",
+              );
+            } else if (
+              (prev === "running" || prev === "analyzing") &&
+              data.status === "failed"
+            ) {
+              toast.error("Migration failed — check the log below for details.");
+            }
           }
+          prevStatusRef.current = data.status;
         }
       } catch (err) {
         if (!cancelled) {
@@ -951,24 +978,6 @@ export default function MigrationView() {
     }
   }
 
-  async function handlePush() {
-    setPushing(true);
-    setActionError(null);
-    try {
-      await api.post(`/migrations/${migrationId}/push`, {
-        output_type: pushType,
-        repo_name: repoName.trim() || undefined,
-      });
-      toast.success("Code pushed to GitHub successfully!");
-      fetchMigration();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setActionError(msg);
-    } finally {
-      setPushing(false);
-    }
-  }
-
   async function handleApplySchema() {
     setApplyingSchema(true);
     try {
@@ -1016,14 +1025,11 @@ export default function MigrationView() {
       setPushedEnvKeys(res.keys);
       setEnvText("");
       toast.success(
-        `Pushed ${res.count} variable${res.count === 1 ? "" : "s"} to Vercel. Redeploying so they take effect...`,
+        `Pushed ${res.count} variable${res.count === 1 ? "" : "s"} to Vercel. Redeploying so they take effect — check the log for details.`,
       );
-      // Auto-redeploy so the new values take effect without a manual step.
-      if (migration?.output_repo_url) {
-        await handleDeploy();
-      } else {
-        await handleDeployDirect();
-      }
+      // Auto-redeploy from GitHub so the new values take effect without a manual
+      // step. No re-push needed — we redeploy the existing repo.
+      await handleDeploy();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(msg);
@@ -1147,35 +1153,49 @@ export default function MigrationView() {
     e.target.value = "";
   }
 
+  // Deploy from the already-pushed GitHub repo. Used for the initial deploy,
+  // retries after a failure (no re-push needed), and env-triggered redeploys.
   async function handleDeploy() {
     setDeploying(true);
     setActionError(null);
     try {
       await api.post(`/migrations/${migrationId}/deploy`);
-      toast.success("Deploying to Vercel...");
+      toast.success("Deploying to Vercel — check the log below for details.");
       setPollKey((k) => k + 1);
+      fetchMigration();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setActionError(msg);
+      toast.error(msg);
       fetchMigration();
     } finally {
       setDeploying(false);
     }
   }
 
-  async function handleDeployDirect() {
-    setDeployingDirect(true);
+  // Push the migrated code to GitHub, then immediately deploy it from there.
+  // GitHub is the only supported path: Vercel deploys from the repo so future
+  // pushes auto-deploy too.
+  async function handlePushAndDeploy() {
+    setPushing(true);
     setActionError(null);
     try {
-      await api.post(`/migrations/${migrationId}/deploy-direct`);
-      toast.success("Deploying to Vercel (no GitHub needed)...");
+      await api.post(`/migrations/${migrationId}/push`, {
+        output_type: pushType,
+        repo_name: repoName.trim() || undefined,
+      });
+      toast.success("Code pushed to GitHub. Starting deploy...");
+      await api.post(`/migrations/${migrationId}/deploy`);
+      toast.success("Deploying to Vercel — check the log below for details.");
       setPollKey((k) => k + 1);
+      fetchMigration();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setActionError(msg);
+      toast.error(msg);
       fetchMigration();
     } finally {
-      setDeployingDirect(false);
+      setPushing(false);
     }
   }
 
@@ -1214,6 +1234,9 @@ export default function MigrationView() {
   const deployStepActive =
     migrationDone && !deployed && !isBuilding && !isFixing;
   const envStepActive = deployed && !envPushed;
+  // A deploy failed (we have a pushed repo) vs the migration run itself failing
+  // (no repo yet). Deploy failures are shown inline so the deploy/env cards stay.
+  const deployFailed = isFailed && !!migration.output_repo_url;
 
   // The migrated code (and generated schema) exist once every file has been
   // processed. This stays true through later deploy attempts (building/fixing/
@@ -1884,8 +1907,20 @@ export default function MigrationView() {
       {(isRunning || isCompleted) && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-lg">Migration Progress</CardTitle>
-            {migration.current_file && (
+            <CardTitle className="text-lg flex items-center gap-2">
+              {isCompleted ? (
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+              ) : (
+                <Loader2 className="h-5 w-5 animate-spin text-purple-500" />
+              )}
+              Migration Progress
+              {isCompleted && (
+                <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
+                  Complete
+                </span>
+              )}
+            </CardTitle>
+            {isRunning && migration.current_file && (
               <CardDescription className="font-mono text-xs">
                 {migration.current_file}
               </CardDescription>
@@ -2122,13 +2157,127 @@ export default function MigrationView() {
         </Card>
       )}
 
-      {/* Push migrated code */}
-      {(isCompleted || isReviewed || deployed) && !isBuilding && !isFixing && (
+      {/* Deploy step 1: push to GitHub + deploy (GitHub is the only path) */}
+      {(isCompleted || isReviewed) &&
+        !migration.output_repo_url &&
+        !isBuilding &&
+        !isFixing && (
+          <Card
+            className={`mb-6 ${
+              deployStepActive
+                ? "border-2 border-green-500/60 shadow-sm"
+                : "border-primary/30"
+            }`}
+          >
+            <CardHeader>
+              <CardTitle
+                className={`text-lg flex items-center gap-2 ${
+                  deployStepActive ? "text-green-700 dark:text-green-400" : ""
+                }`}
+              >
+                <Rocket className="h-5 w-5" />
+                Deploy to Vercel
+                {deployStepActive && (
+                  <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
+                    Next step
+                  </span>
+                )}
+              </CardTitle>
+              <CardDescription>
+                We push your migrated code to GitHub and deploy it to Vercel from
+                there, so every change you push later auto-deploys. Make sure
+                GitHub and Vercel are connected first &mdash; Vercel needs its
+                GitHub integration installed (see{" "}
+                <Link
+                  to="/settings"
+                  className="text-primary hover:underline"
+                >
+                  Settings
+                </Link>
+                ).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {migration.schema_error &&
+                !(migration.schema_applied || schemaApplied) && (
+                  <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <p className="leading-relaxed">
+                      <strong>Create your database tables first.</strong> We
+                      couldn&apos;t set them up automatically, so your app will
+                      deploy but won&apos;t work until the tables exist. Resolve
+                      the <strong>Create Tables in Supabase</strong> step above
+                      before deploying.
+                    </p>
+                  </div>
+                )}
+              <div className="flex gap-2">
+                <Button
+                  variant={pushType === "new" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setPushType("new")}
+                >
+                  <GitFork className="mr-2 h-4 w-4" />
+                  New Repository
+                </Button>
+                <Button
+                  variant={pushType === "branch" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setPushType("branch")}
+                >
+                  <GitBranch className="mr-2 h-4 w-4" />
+                  Branch on Original
+                </Button>
+              </div>
+
+              {pushType === "new" && (
+                <div>
+                  <Label htmlFor="repo-name">Repository Name</Label>
+                  <Input
+                    id="repo-name"
+                    value={repoName}
+                    onChange={(e) => setRepoName(e.target.value)}
+                    placeholder="my-app-supabase"
+                    className="mt-1"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    A new private repo will be created under your GitHub account.
+                  </p>
+                </div>
+              )}
+
+              <Button
+                onClick={handlePushAndDeploy}
+                disabled={
+                  pushing ||
+                  deploying ||
+                  (pushType === "new" && !repoName.trim())
+                }
+              >
+                {pushing || deploying ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Rocket className="mr-2 h-4 w-4" />
+                )}
+                {pushing
+                  ? "Pushing to GitHub..."
+                  : deploying
+                    ? "Deploying..."
+                    : "Push & Deploy to Vercel"}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+      {/* Deploy step 1 (pushed): deploy / retry / redeploy from the GitHub repo */}
+      {migration.output_repo_url && (
         <Card
           className={`mb-6 ${
             deployStepActive
               ? "border-2 border-green-500/60 shadow-sm"
-              : "border-primary/30"
+              : deployFailed
+                ? "border-2 border-destructive/50"
+                : ""
           }`}
         >
           <CardHeader>
@@ -2137,149 +2286,17 @@ export default function MigrationView() {
                 deployStepActive ? "text-green-700 dark:text-green-400" : ""
               }`}
             >
-              <Rocket className="h-5 w-5" />
-              Deploy to Vercel
+              {deployed ? (
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+              ) : (
+                <Rocket className="h-5 w-5" />
+              )}
+              {deployed ? "Deployed to Vercel" : "Deploy to Vercel"}
               {deployStepActive && (
                 <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
                   Next step
                 </span>
               )}
-            </CardTitle>
-            <CardDescription>
-              One click &mdash; no GitHub account required. We upload your
-              migrated app straight to Vercel using your connected Vercel token.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {migration.schema_error &&
-              !(migration.schema_applied || schemaApplied) && (
-                <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
-                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                  <p className="leading-relaxed">
-                    <strong>Create your database tables first.</strong> We
-                    couldn&apos;t set them up automatically, so your app will
-                    deploy but won&apos;t work until the tables exist. Resolve
-                    the <strong>Create Tables in Supabase</strong> step above
-                    before deploying.
-                  </p>
-                </div>
-              )}
-            {!deployed ? (
-              <Button onClick={handleDeployDirect} disabled={deployingDirect}>
-                {deployingDirect ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Rocket className="mr-2 h-4 w-4" />
-                )}
-                {deployingDirect ? "Deploying..." : "Deploy to Vercel"}
-              </Button>
-            ) : (
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 text-green-600">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span className="text-sm font-medium">
-                    Deployed successfully
-                  </span>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDeployDirect}
-                  disabled={deployingDirect}
-                >
-                  {deployingDirect ? (
-                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                  ) : (
-                    <Rocket className="mr-2 h-3 w-3" />
-                  )}
-                  {deployingDirect ? "Redeploying..." : "Redeploy"}
-                </Button>
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Want Vercel to rebuild automatically every time you push code?
-              Push to GitHub below and connect Vercel to GitHub in Settings
-              (optional, but recommended).
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {(isCompleted || isReviewed) && !migration.output_repo_url && (
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              Push to GitHub
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
-                Optional
-              </span>
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-green-700 dark:text-green-400 border border-green-500/50 rounded px-1.5 py-0.5">
-                Recommended
-              </span>
-            </CardTitle>
-            <CardDescription>
-              Push the migrated code to a repo so Vercel can auto-deploy on
-              every push. Not required if you used the one-click deploy above or
-              don't intend to use GitHub.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex gap-2">
-              <Button
-                variant={pushType === "new" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setPushType("new")}
-              >
-                <GitFork className="mr-2 h-4 w-4" />
-                New Repository
-              </Button>
-              <Button
-                variant={pushType === "branch" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setPushType("branch")}
-              >
-                <GitBranch className="mr-2 h-4 w-4" />
-                Branch on Original
-              </Button>
-            </div>
-
-            {pushType === "new" && (
-              <div>
-                <Label htmlFor="repo-name">Repository Name</Label>
-                <Input
-                  id="repo-name"
-                  value={repoName}
-                  onChange={(e) => setRepoName(e.target.value)}
-                  placeholder="my-app-supabase"
-                  className="mt-1"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  A new private repo will be created under your GitHub account.
-                </p>
-              </div>
-            )}
-
-            <Button
-              onClick={handlePush}
-              disabled={pushing || (pushType === "new" && !repoName.trim())}
-            >
-              {pushing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Rocket className="mr-2 h-4 w-4" />
-              )}
-              {pushing ? "Pushing..." : "Push Code"}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {migration.output_repo_url && (
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-green-600" />
-              Code Pushed
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -2300,45 +2317,91 @@ export default function MigrationView() {
                 <p className="text-sm font-mono">{migration.output_branch}</p>
               </div>
             )}
-            {!isBuilding && !isFixing && !deployed && (
-              <Button
-                variant="outline"
-                onClick={handleDeploy}
-                disabled={deploying}
-              >
-                <Rocket className="mr-2 h-4 w-4" />
-                {deploying ? "Deploying..." : "Deploy from GitHub repo"}
-              </Button>
-            )}
-            {deployed && (
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 text-green-600">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span className="text-sm font-medium">
-                    Deployed successfully
-                  </span>
+
+            {migration.schema_error &&
+              !(migration.schema_applied || schemaApplied) && (
+                <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <p className="leading-relaxed">
+                    <strong>Create your database tables first.</strong> Your app
+                    will deploy but won&apos;t work until the tables exist &mdash;
+                    resolve the <strong>Create Tables in Supabase</strong> step
+                    above.
+                  </p>
                 </div>
+              )}
+
+            {deployFailed && (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <div className="leading-relaxed">
+                  <p>
+                    <strong>Deployment failed.</strong>{" "}
+                    {migration.error_message}
+                  </p>
+                  <p className="mt-0.5">
+                    Check the log below for details. You can retry without
+                    pushing your code again.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {(isBuilding || isFixing) && (
+              <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Deploying&hellip; check the log below for details.
+              </p>
+            )}
+
+            {!isBuilding &&
+              !isFixing &&
+              (deployed ? (
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 text-green-600">
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span className="text-sm font-medium">
+                      Deployed successfully
+                    </span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDeploy}
+                    disabled={deploying}
+                  >
+                    {deploying ? (
+                      <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                    ) : (
+                      <Rocket className="mr-2 h-3 w-3" />
+                    )}
+                    {deploying ? "Redeploying..." : "Redeploy"}
+                  </Button>
+                </div>
+              ) : (
                 <Button
-                  variant="outline"
-                  size="sm"
+                  variant={deployFailed ? "default" : "outline"}
                   onClick={handleDeploy}
                   disabled={deploying}
                 >
                   {deploying ? (
-                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
-                    <Rocket className="mr-2 h-3 w-3" />
+                    <Rocket className="mr-2 h-4 w-4" />
                   )}
-                  {deploying ? "Redeploying..." : "Redeploy"}
+                  {deploying
+                    ? "Deploying..."
+                    : deployFailed
+                      ? "Retry Deployment"
+                      : "Deploy from GitHub"}
                 </Button>
-              </div>
-            )}
+              ))}
           </CardContent>
         </Card>
       )}
 
       {/* Environment variable transfer */}
-      {deployed &&
+      {(deployed || deployFailed) &&
         (() => {
           const previewKeys = previewEnvKeys(envText);
           return (
@@ -2830,34 +2893,8 @@ export default function MigrationView() {
         </Card>
       )}
 
-      {/* Deployment error */}
-      {isFailed && migration.error_message && migration.output_repo_url && (
-        <Card className="mb-6 border-destructive">
-          <CardContent className="py-4">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="font-medium text-destructive">
-                  Deployment Failed
-                </p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {migration.error_message}
-                </p>
-                <div className="mt-3">
-                  <Button size="sm" onClick={handleDeploy} disabled={deploying}>
-                    {deploying ? (
-                      <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-                    ) : (
-                      <Rocket className="mr-2 h-3 w-3" />
-                    )}
-                    {deploying ? "Redeploying..." : "Retry Deployment"}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Deploy failures are shown inline in the Deploy card above so the
+          deploy + env-vars cards stay visible. */}
 
       {/* Migration error */}
       {isFailed && migration.error_message && !migration.output_repo_url && (
