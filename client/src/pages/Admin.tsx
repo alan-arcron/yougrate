@@ -609,7 +609,9 @@ export default function Admin() {
                     <p className={`text-2xl font-bold ${stats.anthropic_margin_cents >= 0 ? "text-green-600" : "text-red-600"}`}>
                       ${(stats.anthropic_margin_cents / 100).toFixed(2)}
                     </p>
-                    <p className="text-xs text-muted-foreground">Margin</p>
+                    <p className="text-xs text-muted-foreground">
+                      Realized Margin
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -900,13 +902,18 @@ export default function Admin() {
                                             cp?.token_billed_cents || 0;
                                           const codeReview =
                                             cp?.addon_code_review_cents || 0;
-                                          const totalPaid = estimated
+                                          // Only count money actually collected
+                                          // via Stripe. We don't show margin on
+                                          // unrealized (quoted-but-unpaid) revenue.
+                                          const paidAmount = cp?.charged_cents || 0;
+                                          const paid = paidAmount > 0;
+                                          const quote = estimated
                                             ? cp.total_cents
                                             : 0;
-                                          const margin = totalPaid - totalSpend;
+                                          const margin = paidAmount - totalSpend;
                                           const marginPct =
-                                            totalPaid > 0
-                                              ? (margin / totalPaid) * 100
+                                            paid && paidAmount > 0
+                                              ? (margin / paidAmount) * 100
                                               : null;
                                           return (
                                             <div>
@@ -949,17 +956,25 @@ export default function Admin() {
                                                   </div>
                                                 </div>
 
-                                                {/* Total the customer paid */}
-                                                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+                                                {/* What the customer paid (or was quoted, if unpaid) */}
+                                                <div
+                                                  className={`rounded-lg border p-3 ${paid ? "border-primary/30 bg-primary/5" : "bg-muted/40"}`}
+                                                >
                                                   <p className="text-xs text-muted-foreground">
-                                                    Total customer paid
+                                                    {paid
+                                                      ? "Total customer paid"
+                                                      : "Quoted estimate (unpaid)"}
                                                   </p>
                                                   {estimated ? (
                                                     <>
-                                                      <p className="text-lg font-mono font-bold text-primary">
+                                                      <p
+                                                        className={`text-lg font-mono font-bold ${paid ? "text-primary" : "text-muted-foreground"}`}
+                                                      >
                                                         $
                                                         {(
-                                                          totalPaid / 100
+                                                          (paid
+                                                            ? paidAmount
+                                                            : quote) / 100
                                                         ).toFixed(2)}
                                                       </p>
                                                       <div className="mt-2 space-y-1 text-xs font-mono text-muted-foreground">
@@ -1009,7 +1024,7 @@ export default function Admin() {
                                                 </div>
                                               </div>
 
-                                              {estimated && (
+                                              {paid && (
                                                 <div className="flex items-center gap-6 mt-3">
                                                   <div>
                                                     <span className="text-xs text-muted-foreground">
@@ -1040,9 +1055,9 @@ export default function Admin() {
                                               <p className="text-[11px] text-muted-foreground mt-1.5">
                                                 {!estimated
                                                   ? "Pricing appears once analysis finishes and produces a token estimate."
-                                                  : cp.charged_cents > 0
-                                                    ? `Collected so far: $${(cp.charged_cents / 100).toFixed(2)} (quoted up front; this is the estimate they were charged).`
-                                                    : "Quoted estimate — not paid yet."}
+                                                  : paid
+                                                    ? `Paid $${(paidAmount / 100).toFixed(2)} via Stripe.`
+                                                    : "Quoted estimate — not paid yet, so no margin is counted."}
                                               </p>
                                             </div>
                                           );

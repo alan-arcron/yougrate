@@ -122,6 +122,29 @@ router.get("/stats", async (_req: AuthRequest, res: Response) => {
     (Number(anthropicTokens?.total_output) || 0) + (Number(anthropicTokens?.analysis_output) || 0),
   );
 
+  // Realized margin: only count the token cost of migrations that were actually
+  // PAID for, against the revenue we actually collected. We don't want margin on
+  // unrealized revenue (e.g. quoted-but-unpaid migrations or free analyses).
+  const paidTokens = await db("migrations")
+    .whereIn(
+      "id",
+      db("billing_events")
+        .where({ status: "paid" })
+        .whereNotNull("migration_id")
+        .distinct("migration_id"),
+    )
+    .select(
+      db.raw("COALESCE(SUM(actual_input_tokens), 0) as total_input"),
+      db.raw("COALESCE(SUM(actual_output_tokens), 0) as total_output"),
+      db.raw("COALESCE(SUM(analysis_input_tokens), 0) as analysis_input"),
+      db.raw("COALESCE(SUM(analysis_output_tokens), 0) as analysis_output"),
+    )
+    .first();
+  const paidAnthropicCostCents = rawAnthropicCostCents(
+    (Number(paidTokens?.total_input) || 0) + (Number(paidTokens?.analysis_input) || 0),
+    (Number(paidTokens?.total_output) || 0) + (Number(paidTokens?.analysis_output) || 0),
+  );
+
   res.json({
     total_users: Number(userCount.count),
     total_migrations: Number(migrationCount.count),
@@ -129,7 +152,7 @@ router.get("/stats", async (_req: AuthRequest, res: Response) => {
     pending_reviews: Number(pendingReviews.count),
     total_revenue_cents: totalRevenueCents,
     anthropic_cost_cents: totalAnthropicCostCents,
-    anthropic_margin_cents: totalRevenueCents - totalAnthropicCostCents,
+    anthropic_margin_cents: totalRevenueCents - paidAnthropicCostCents,
     anthropic_tokens: {
       total_input: Number(anthropicTokens?.total_input) || 0,
       total_output: Number(anthropicTokens?.total_output) || 0,
