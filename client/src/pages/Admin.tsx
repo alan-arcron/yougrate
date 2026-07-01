@@ -31,6 +31,8 @@ import {
   Download,
   Trash2,
   Pencil,
+  Copy,
+  Check,
 } from "lucide-react";
 
 interface Stats {
@@ -195,6 +197,46 @@ const STATUS_COLORS: Record<string, string> = {
   resolved: "bg-green-500",
   closed: "bg-zinc-500",
 };
+
+// Small inline "copy to clipboard" control for an email address. Uses a span
+// (not a button) with stopPropagation so it can live inside clickable rows
+// without nesting interactive elements.
+function CopyEmailButton({ email }: { email: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = (e: React.SyntheticEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    navigator.clipboard.writeText(email).then(
+      () => {
+        setCopied(true);
+        toast.success("Email copied");
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => toast.error("Couldn't copy email"),
+    );
+  };
+
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      title="Copy email"
+      aria-label="Copy email"
+      onClick={copy}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") copy(e);
+      }}
+      className="inline-flex items-center justify-center rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer shrink-0"
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-green-600" />
+      ) : (
+        <Copy className="h-3.5 w-3.5" />
+      )}
+    </span>
+  );
+}
 
 export default function Admin() {
   const { profile, loading: authLoading } = useAuth();
@@ -698,9 +740,12 @@ export default function Admin() {
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">
-                            {u.email}
-                          </p>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <p className="text-sm font-medium truncate">
+                              {u.email}
+                            </p>
+                            <CopyEmailButton email={u.email} />
+                          </div>
                           <p className="text-xs text-muted-foreground">
                             {u.name || "No name"}{" "}
                             {u.github_username && `(@${u.github_username})`}
