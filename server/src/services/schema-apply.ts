@@ -1,6 +1,7 @@
 import { Client } from "pg";
 import * as s3 from "./s3";
 import { redactSecrets } from "../utils/redact";
+import { parsePgConnString } from "../utils/pg-conn";
 
 const SCHEMA_KEY_SUFFIX = "migrated/supabase/migrations/001_initial_schema.sql";
 
@@ -13,16 +14,15 @@ const SCHEMA_KEY_SUFFIX = "migrated/supabase/migrations/001_initial_schema.sql";
 export function validateSupabaseConnectionString(
   raw: string,
 ): { ok: true; host: string } | { ok: false; error: string } {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return { ok: false, error: "That doesn't look like a valid connection string." };
+  const parsed = parsePgConnString(raw);
+  if (!parsed) {
+    return {
+      ok: false,
+      error:
+        "That doesn't look like a valid connection string — it should start with postgresql:// and come from Supabase's Connect dialog.",
+    };
   }
-  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
-    return { ok: false, error: "Connection string must start with postgresql://" };
-  }
-  const host = url.hostname.toLowerCase();
+  const host = parsed.host.toLowerCase();
   const allowed = host.endsWith(".supabase.co") || host.endsWith(".supabase.com");
   if (!allowed) {
     return {
@@ -73,8 +73,21 @@ export async function applySchema(
   connectionString: string,
   sql: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // Parse into discrete fields ourselves — pg's own URL parser rejects
+  // passwords containing '/', '#', or '?' (common in Supabase passwords).
+  const parsed = parsePgConnString(connectionString);
+  if (!parsed) {
+    return {
+      ok: false,
+      error: "That doesn't look like a valid connection string.",
+    };
+  }
   const client = new Client({
-    connectionString,
+    host: parsed.host,
+    port: parsed.port,
+    user: parsed.user,
+    password: parsed.password,
+    database: parsed.database,
     ssl: { rejectUnauthorized: false },
     connectionTimeoutMillis: 10000,
     statement_timeout: 60000,

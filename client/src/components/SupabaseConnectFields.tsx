@@ -23,6 +23,42 @@ export function normalizeRef(input: string): string {
 }
 
 /**
+ * Tolerant parse of a Postgres connection string. `new URL()` throws when the
+ * password contains '/', '#', or '?' — all legal in a Postgres password and
+ * common in Supabase's — which would wrongly reject a valid pooler string. We
+ * split the authority ourselves (last '@' separates userinfo from host) and
+ * treat the password as a literal. Mirrors server/src/utils/pg-conn.ts.
+ */
+function parseConnLoose(
+  raw: string,
+): { user: string; password: string; host: string; port: number } | null {
+  const s = raw.trim();
+  const proto = s.match(/^postgres(?:ql)?:\/\//i);
+  if (!proto) return null;
+  const rest = s.slice(proto[0].length);
+  const at = rest.lastIndexOf("@");
+  if (at === -1) return null;
+  const userinfo = rest.slice(0, at);
+  let hostSection = rest.slice(at + 1);
+  if (!userinfo || !hostSection) return null;
+  const colon = userinfo.indexOf(":");
+  const user = colon === -1 ? userinfo : userinfo.slice(0, colon);
+  const password = colon === -1 ? "" : userinfo.slice(colon + 1);
+  const q = hostSection.search(/[?#]/);
+  if (q !== -1) hostSection = hostSection.slice(0, q);
+  const slash = hostSection.indexOf("/");
+  const hostPort = slash === -1 ? hostSection : hostSection.slice(0, slash);
+  const hp = hostPort.match(/^([^:/]+)(?::(\d+))?$/);
+  if (!hp || !hp[1]) return null;
+  return {
+    user,
+    password,
+    host: hp[1],
+    port: hp[2] ? parseInt(hp[2], 10) : 5432,
+  };
+}
+
+/**
  * Client-side sanity check for a pasted Supabase connection string, so users
  * see a clear error BEFORE submitting instead of a cryptic failure when we try
  * to apply the schema. Returns an error message, or null if it's empty or looks
@@ -34,20 +70,15 @@ export function validateConnString(raw: string): string | null {
   if (/\[YOUR-PASSWORD\]|<password>|\[password\]|YOUR-PASSWORD/i.test(s)) {
     return "Replace [YOUR-PASSWORD] with your actual database password.";
   }
-  let url: URL;
-  try {
-    url = new URL(s);
-  } catch {
+  const parsed = parseConnLoose(s);
+  if (!parsed) {
     return "That doesn't look like a valid connection string — it should start with postgresql:// and come from Supabase's Connect dialog.";
   }
-  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
-    return "Connection string must start with postgresql://";
-  }
-  const host = url.hostname.toLowerCase();
+  const host = parsed.host.toLowerCase();
   if (!(host.endsWith(".supabase.co") || host.endsWith(".supabase.com"))) {
     return "Use your Supabase database host (ends in .supabase.com). Copy the Session pooler URI from the Connect dialog.";
   }
-  if (!url.password) {
+  if (!parsed.password) {
     return "Your connection string is missing the password (postgres.<ref>:<password>@…).";
   }
   return null;
@@ -60,13 +91,9 @@ export function validateConnString(raw: string): string | null {
 export function connStringWarning(raw: string): string | null {
   const s = raw.trim();
   if (!s) return null;
-  let url: URL;
-  try {
-    url = new URL(s);
-  } catch {
-    return null;
-  }
-  const host = url.hostname.toLowerCase();
+  const parsed = parseConnLoose(s);
+  if (!parsed) return null;
+  const host = parsed.host.toLowerCase();
   if (host.startsWith("db.") && host.endsWith(".supabase.co")) {
     return "This is the direct connection (IPv6-only) — it usually can't be reached from our servers. Use the Session pooler URI instead (aws-…pooler.supabase.com).";
   }
